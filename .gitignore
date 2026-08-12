@@ -1,0 +1,33 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+*.whl
+
+# Local tooling and editor state
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# MASA runtime output
+masa.json.tmp
+masa.yaml.tmp
+*-masa/
+*.log
