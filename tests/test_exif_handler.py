@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from exif_handler import find_sidecar_json, parse_takeout_json
@@ -28,7 +28,7 @@ def test_parse_takeout_json(tmp_path: Path) -> None:
 
     taken_time, lat, lon, data = parse_takeout_json(str(sidecar))
 
-    assert taken_time == datetime.fromtimestamp(1609459200)
+    assert taken_time == datetime.fromtimestamp(1609459200, tz=timezone.utc)
     assert lat == 59.3293
     assert lon == 18.0686
     assert data["photoTakenTime"]["timestamp"] == "1609459200"

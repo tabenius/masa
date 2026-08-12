@@ -3,8 +3,8 @@
 MASA is a Python CLI tool for processing Google Takeout photo archives from a
 directory, ZIP file, or TAR/TAR.GZ file. It reads Google Photos JSON sidecars,
 embeds available date and GPS metadata, downscales images, converts output to
-AVIF or WEBP, writes a cryptographic manifest, and can remove processed
-originals after successful output.
+AVIF or WEBP, writes a cryptographic manifest, and can optionally remove
+processed originals after successful output when `-f/--delete-originals` is set.
 
 ## Features
 
@@ -13,12 +13,21 @@ originals after successful output.
 - Safely extracts archives into a private temporary workspace.
 - Finds common Google Photos JSON sidecar names, including duplicate filename
   patterns such as `IMG_0001.jpg(1).json`.
-- Uses `photoTakenTime.timestamp` from sidecars when available, falling back to
-  the source file modification time.
+- Uses timezone-aware UTC `photoTakenTime.timestamp` values from sidecars when
+  available, falling back to the source file modification time.
 - Embeds EXIF date fields and GPS coordinates when metadata is available.
 - Downscales images to a configurable maximum dimension.
-- Converts JPEG/JPG sources to AVIF.
-- Converts PNG, WEBP, TIFF/TIF, and BMP sources to lossless WEBP.
+- Converts JPEG/JPG sources to AVIF when AVIF support is available.
+- Converts PNG, GIF, WEBP, TIFF/TIF, and BMP sources to lossless WEBP when WEBP
+  support is available.
+- If AVIF support is missing, asks whether to use JPEG instead at slightly lower
+  quality.
+- If WEBP support is missing for lossless-style inputs such as GIF or PNG, asks
+  whether to use optimized palette PNG instead.
+- Keeps source files by default. `-f/--delete-originals` is required to remove
+  directory input originals and sidecars after successful output.
+- Avoids output filename collisions by appending numeric suffixes such as
+  `-001`.
 - Writes year-based output folders, with optional `YYYY/MM` month stratification.
 - Writes a resumable manifest in JSON or YAML with original and output hashes,
   sizes, formats, dimensions, output path, and date taken.
@@ -57,10 +66,10 @@ Show help:
 ./masa --help
 ```
 
-Process a Takeout directory and keep the original files:
+Process a Takeout directory. Originals are kept by default:
 
 ```bash
-./masa /path/to/takeout --keep-original
+./masa /path/to/takeout
 ```
 
 Process a ZIP archive, group output by year and month, and tune image quality:
@@ -72,13 +81,19 @@ Process a ZIP archive, group output by year and month, and tune image quality:
 Write to an explicit output directory:
 
 ```bash
-./masa /path/to/takeout -o /path/to/output --keep-original
+./masa /path/to/takeout -o /path/to/output
 ```
 
 Write a YAML manifest:
 
 ```bash
-./masa /path/to/takeout --format yaml --keep-original
+./masa /path/to/takeout --format yaml
+```
+
+Delete originals and sidecars after successful conversion of a directory input:
+
+```bash
+./masa /path/to/takeout -f
 ```
 
 Preview without writing output, deleting originals, or saving manifest records:
@@ -114,13 +129,18 @@ FORCE_COLOR=1 ./masa --help
 : Maximum width or height in pixels. Defaults to `2048`.
 
 `--quality`
-: AVIF quality for JPEG/JPG inputs. Defaults to `80`.
+: AVIF quality for JPEG/JPG inputs. If AVIF is unavailable and you accept the
+  JPEG fallback, the fallback JPEG is saved at `quality - 10`. If WEBP is
+  unavailable and you accept the PNG fallback, MASA writes an optimized
+  palette-based PNG. Defaults to `80`.
+
+`-f, --delete-originals`
+: Delete original files and JSON sidecars after successful processing when the
+  input is a plain directory. Archive inputs are extracted into temporary space,
+  so the original archive is not deleted.
 
 `--keep-original`
-: Keep original files after successful processing. Without this option, MASA
-  deletes originals and sidecars after successful conversion when the input is a
-  plain directory. Archive inputs are extracted into temporary space, so the
-  original archive is not deleted.
+: Compatibility no-op. Originals are kept unless `-f/--delete-originals` is set.
 
 `--dry-run`
 : Read inputs and show the summary without writing output, writing manifest
@@ -167,13 +187,29 @@ same output directory skips records that are already present.
 
 ## Important Safety Notes
 
-The default behavior removes source files after successful conversion when the
-input is a directory. Use `--keep-original` for the first run unless you have a
-separate backup and have verified the output.
+MASA keeps originals by default. Passing `-f/--delete-originals` changes that:
+after an output file is written, hashed, and recorded, MASA removes the source
+image and matching JSON sidecar for directory inputs.
 
-The tool does not currently deduplicate filename collisions in the output
-directory. If two source files share the same basename and date bucket, the later
-file can overwrite the earlier output. See the improvement suggestions below.
+Default deletion would be dangerous for this kind of tool because archival photo
+processing has several failure modes that are hard to detect immediately:
+
+- encoder bugs or unsupported metadata can produce a readable but lower-value
+  output file
+- AVIF/JPEG/PNG fallbacks may not preserve every property from the source
+- EXIF embedding can silently fail when `piexif` is missing or rejects metadata
+- a bad output directory choice can put the only copy on the wrong disk
+- user expectations differ: some people want compression copies, not migration
+
+Further mitigations worth adding before trusting `-f` for large archives:
+
+- move originals to a quarantine folder or OS trash instead of deleting them
+- add a `--confirm-delete` prompt summarizing file count and total bytes
+- require `--backup-dir` for destructive runs
+- verify each output can be reopened after copying and before removing input
+- write a deletion log or undo script with every removed path
+- keep originals when the output is larger than the source unless explicitly
+  overridden
 
 ## Project Structure
 
@@ -197,14 +233,11 @@ file can overwrite the earlier output. See the improvement suggestions below.
 
 ## Improvement Suggestions
 
-- Add collision-safe output naming before using the default delete-original
-  behavior on large archives.
 - Add integration tests with small JPEG, PNG, sidecar JSON, ZIP, and TAR
   fixtures.
-- Add a `--no-delete` default or a first-run confirmation prompt before
-  deleting originals.
 - Add a structured `--report` option that writes the summary as JSON for scripts.
 - Add support for preserving selected original files when conversion output is
   larger than the source.
+- Add a quarantine/trash deletion mode before using `-f` on large archives.
 - Add a package namespace such as `masa_cli` to avoid top-level module names like
   `archive.py` and `cli.py` when installed into shared environments.

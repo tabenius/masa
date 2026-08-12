@@ -4,8 +4,8 @@ import shutil
 import sys
 import tempfile
 import time
-from textwrap import dedent
 from datetime import datetime
+from textwrap import dedent
 
 from archive import detect_and_prepare_input
 from exif_handler import build_exif_bytes, find_sidecar_json, parse_takeout_json
@@ -13,7 +13,8 @@ from manifest import ManifestManager, compute_sha256
 from ui import print_error, print_warning, render_progress
 
 
-VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif", ".bmp"}
+VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif", ".bmp", ".gif"}
+LOSSLESS_SOURCE_FORMATS = {"PNG", "GIF", "WEBP", "TIFF", "TIF", "BMP"}
 
 BOLD = "\033[1m"
 CYAN = "\033[36m"
@@ -98,15 +99,73 @@ def _output_extension(orig_format: str | None) -> tuple[str, str]:
     return ".webp", "WEBP"
 
 
+def _unique_destination_path(dest_path: str, dry_run: bool) -> str:
+    if dry_run or not os.path.exists(dest_path):
+        return dest_path
+
+    base, ext = os.path.splitext(dest_path)
+    counter = 1
+    while True:
+        candidate = f"{base}-{counter:03d}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+        counter += 1
+
+
+def _ask_yes_no(prompt: str) -> bool:
+    sys.stdout.write(f"{_style('?', YELLOW)} {prompt} [y/N] ")
+    sys.stdout.flush()
+    try:
+        answer = input().strip().lower()
+    except EOFError:
+        sys.stdout.write("\n")
+        return False
+    return answer in {"y", "yes"}
+
+
+def _resolve_output_format(
+    orig_format: str | None,
+    can_save_format,
+    fallback_decisions: dict[str, bool],
+) -> tuple[str, str] | None:
+    normalized = (orig_format or "").upper()
+    if normalized == "JPG":
+        normalized = "JPEG"
+
+    if normalized == "JPEG":
+        if can_save_format("AVIF"):
+            return ".avif", "AVIF"
+        if "avif_to_jpeg" not in fallback_decisions:
+            print_warning("AVIF output is unavailable because pillow-avif-plugin is not installed or not registered.")
+            fallback_decisions["avif_to_jpeg"] = _ask_yes_no(
+                "Use JPEG instead at slightly lower quality for JPEG/JPG inputs?"
+            )
+        return (".jpg", "JPEG") if fallback_decisions["avif_to_jpeg"] else None
+
+    if can_save_format("WEBP"):
+        return ".webp", "WEBP"
+
+    if normalized in LOSSLESS_SOURCE_FORMATS:
+        if "webp_to_png" not in fallback_decisions:
+            print_warning("WEBP output is unavailable in this Pillow build.")
+            fallback_decisions["webp_to_png"] = _ask_yes_no(
+                "Use PNG instead for lossless inputs such as GIF or PNG?"
+            )
+        return (".png", "PNG") if fallback_decisions["webp_to_png"] else None
+
+    return None
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=_style("MASA - Media Archive Structuring & Archival CLI", f"{BOLD}{MAGENTA}"),
         epilog=dedent(
             f"""\
             {_style("Examples", f"{BOLD}{CYAN}")}
-              ./masa /path/to/takeout --keep-original
+              ./masa /path/to/takeout
               ./masa /path/to/takeout.zip --by-month --max-dim 2048 --quality 82
               ./masa /path/to/takeout -o /path/to/output --format yaml
+              ./masa /path/to/takeout -f
               NO_COLOR=1 ./masa --help
             """
         ),
@@ -117,7 +176,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--by-month", action="store_true", help="Stratify directory layout by month (YYYY/MM/).")
     parser.add_argument("--max-dim", type=int, default=2048, help="Maximum dimension in pixels (default: 2048).")
     parser.add_argument("--quality", type=int, default=80, help="Compression quality for lossy formats (default: 80).")
-    parser.add_argument("--keep-original", action="store_true", help="Do not delete original files after processing.")
+    parser.add_argument(
+        "-f",
+        "--delete-originals",
+        action="store_true",
+        help="Delete original files and sidecars after successful processing. Dangerous; keep backups.",
+    )
+    parser.add_argument(
+        "--keep-original",
+        action="store_true",
+        help="Compatibility no-op. Originals are kept unless -f/--delete-originals is set.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Perform a dry run without writing files.")
     parser.add_argument("--format", choices=["json", "yaml"], default="json", help="Manifest format (default: json).")
     return parser.parse_args(argv)
@@ -129,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from PIL import Image
 
-        from image_processor import process_single_image
+        from image_processor import can_save_format, process_single_image
     except ImportError as e:
         print_error(f"Missing required dependency: {e.name}. Run: python -m pip install -e .")
         return 1
@@ -157,6 +226,12 @@ def main(argv: list[str] | None = None) -> int:
         error_count = 0
         total_orig_bytes = 0
         total_out_bytes = 0
+        fallback_decisions = {}
+
+        if args.delete_originals:
+            print_warning(
+                "-f/--delete-originals is enabled. MASA will remove directory input originals after successful output."
+            )
 
         for idx, img_path in enumerate(all_files, start=1):
             rel_path = os.path.relpath(img_path, working_dir)
@@ -174,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
             json_path = find_sidecar_json(img_path)
             taken_time, lat, lon, _ = parse_takeout_json(json_path) if json_path else (None, 0.0, 0.0, {})
             if not taken_time:
-                taken_time = datetime.fromtimestamp(os.path.getmtime(img_path))
+                taken_time = datetime.fromtimestamp(os.path.getmtime(img_path)).astimezone()
 
             try:
                 with Image.open(img_path) as orig_img:
@@ -188,6 +263,13 @@ def main(argv: list[str] | None = None) -> int:
                 error_count += 1
                 continue
 
+            output_choice = _resolve_output_format(orig_format, can_save_format, fallback_decisions)
+            if output_choice is None:
+                render_progress(idx, "compressing", 3, 5, state="error", error_msg="No available output encoder")
+                error_count += 1
+                continue
+            out_ext, out_format = output_choice
+
             render_progress(idx, "scaling", 2, 5, state="running")
             render_progress(idx, "compressing", 3, 5, state="running")
             try:
@@ -197,9 +279,9 @@ def main(argv: list[str] | None = None) -> int:
                         args.max_dim,
                         args.quality,
                         exif_bytes,
+                        out_format,
                     )
                 else:
-                    out_ext, out_format = _output_extension(orig_format)
                     temp_out_file = None
             except Exception as e:
                 render_progress(idx, "compressing", 3, 5, state="error", error_msg=f"Processing failed: {e}")
@@ -214,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
                 else os.path.join(output_dir, year_str)
             )
             dest_path = os.path.join(dest_dir, f"{os.path.splitext(os.path.basename(img_path))[0]}{out_ext}")
+            dest_path = _unique_destination_path(dest_path, args.dry_run)
 
             if not args.dry_run:
                 os.makedirs(dest_dir, exist_ok=True)
@@ -247,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
                 manifest.add_record(rel_path, record)
 
             render_progress(idx, "cleaning", 5, 5, state="running")
-            if not args.keep_original and not args.dry_run and not is_temp:
+            if args.delete_originals and not args.dry_run and not is_temp:
                 try:
                     os.remove(img_path)
                     if json_path and os.path.exists(json_path):

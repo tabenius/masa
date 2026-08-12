@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 try:
@@ -42,7 +42,7 @@ def parse_takeout_json(json_path: str) -> tuple[datetime | None, float, float, d
         taken_time = None
         timestamp = data.get("photoTakenTime", {}).get("timestamp")
         if timestamp:
-            taken_time = datetime.fromtimestamp(int(timestamp))
+            taken_time = datetime.fromtimestamp(int(timestamp), tz=timezone.utc)
 
         geo_data = data.get("geoData", {}) or data.get("geoDataExif", {})
         lat = float(geo_data.get("latitude", 0.0) or 0.0)
@@ -79,7 +79,8 @@ def build_exif_bytes(
         pass
 
     if taken_time:
-        date_str = taken_time.strftime("%Y:%m:%d %H:%M:%S")
+        exif_time = taken_time.astimezone().replace(tzinfo=None) if taken_time.tzinfo else taken_time
+        date_str = exif_time.strftime("%Y:%m:%d %H:%M:%S")
         exif_dict["0th"][piexif.ImageIFD.DateTime] = date_str.encode("utf-8")
         exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = date_str.encode("utf-8")
         exif_dict["Exif"][piexif.ExifIFD.DateTimeDigitized] = date_str.encode("utf-8")
