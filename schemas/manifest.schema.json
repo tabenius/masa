@@ -37,7 +37,32 @@
           "output_size": {"type": "integer", "minimum": 0},
           "output_format": {"type": "string"},
           "output_verified": {"type": "boolean"},
-          "metadata_verification": {"type": "object"},
+          "metadata_verification": {
+            "type": "object",
+            "properties": {
+              "checked": {"type": "boolean"},
+              "date_present": {"type": "boolean"},
+              "date_matches": {"type": "boolean"},
+              "expected_date": {"type": ["string", "null"]},
+              "actual_date": {"type": ["string", "null"]},
+              "gps_present": {"type": "boolean"},
+              "gps_matches": {"type": "boolean"},
+              "expected_gps": {
+                "type": ["array", "null"],
+                "prefixItems": [{"type": "number"}, {"type": "number"}],
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "actual_gps": {
+                "type": ["array", "null"],
+                "prefixItems": [{"type": "number"}, {"type": "number"}],
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "message": {"type": "string"}
+            },
+            "additionalProperties": true
+          },
           "exif_tags_kept": {"type": "boolean"},
           "date_taken": {"type": "string"}
         },

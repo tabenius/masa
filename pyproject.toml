@@ -16,6 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+trash = [
+  "Send2Trash>=1.8",
+]
 dev = [
   "build>=1.2",
   "pytest>=8",

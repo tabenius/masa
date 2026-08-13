@@ -18,7 +18,7 @@ from masa_cli.ui import print_error, print_warning, render_progress
 
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif", ".bmp", ".gif"}
 LOSSLESS_SOURCE_FORMATS = {"PNG", "GIF", "WEBP", "TIFF", "TIF", "BMP"}
-SUBCOMMANDS = {"process", "inspect", "cleanup", "report"}
+SUBCOMMANDS = {"process", "inspect", "cleanup", "report", "benchmark"}
 
 BOLD = "\033[1m"
 CYAN = "\033[36m"
@@ -213,8 +213,43 @@ def _verify_output(path: str, expected_format: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def _ratio_to_float(value) -> float:
+    try:
+        return float(value[0]) / float(value[1])
+    except TypeError:
+        return float(value)
+
+
+def _dms_to_decimal(dms, ref: bytes | str) -> float:
+    degrees = _ratio_to_float(dms[0])
+    minutes = _ratio_to_float(dms[1])
+    seconds = _ratio_to_float(dms[2])
+    decimal = degrees + minutes / 60 + seconds / 3600
+    ref_text = ref.decode("ascii", errors="ignore") if isinstance(ref, bytes) else str(ref)
+    return -decimal if ref_text in {"S", "W"} else decimal
+
+
+def _decode_exif_date(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def _verify_metadata(path: str, expected_time: datetime | None, expected_lat: float, expected_lon: float) -> dict:
-    result = {"checked": False, "date_present": False, "gps_present": False, "message": ""}
+    result = {
+        "checked": False,
+        "date_present": False,
+        "date_matches": False,
+        "expected_date": expected_time.astimezone().strftime("%Y:%m:%d %H:%M:%S") if expected_time else None,
+        "actual_date": None,
+        "gps_present": False,
+        "gps_matches": False,
+        "expected_gps": [expected_lat, expected_lon] if expected_lat or expected_lon else None,
+        "actual_gps": None,
+        "message": "",
+    }
     try:
         import piexif
         from PIL import Image
@@ -229,13 +264,22 @@ def _verify_metadata(path: str, expected_time: datetime | None, expected_lat: fl
         date_value = exif_dict.get("Exif", {}).get(piexif.ExifIFD.DateTimeOriginal) or exif_dict.get("0th", {}).get(
             piexif.ImageIFD.DateTime
         )
+        result["actual_date"] = _decode_exif_date(date_value)
         result["date_present"] = bool(date_value) if expected_time else False
+        result["date_matches"] = bool(result["expected_date"] and result["actual_date"] == result["expected_date"])
         gps = exif_dict.get("GPS", {})
         result["gps_present"] = (
             bool(gps.get(piexif.GPSIFD.GPSLatitude) and gps.get(piexif.GPSIFD.GPSLongitude))
             if expected_lat or expected_lon
             else False
         )
+        if result["gps_present"]:
+            actual_lat = _dms_to_decimal(gps[piexif.GPSIFD.GPSLatitude], gps.get(piexif.GPSIFD.GPSLatitudeRef, b"N"))
+            actual_lon = _dms_to_decimal(gps[piexif.GPSIFD.GPSLongitude], gps.get(piexif.GPSIFD.GPSLongitudeRef, b"E"))
+            result["actual_gps"] = [actual_lat, actual_lon]
+            result["gps_matches"] = (
+                abs(actual_lat - expected_lat) <= 0.0003 and abs(actual_lon - expected_lon) <= 0.0003
+            )
         return result
     except Exception as e:
         result["message"] = str(e)
@@ -344,6 +388,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
               masa /path/to/takeout.zip --by-month --workers 4 --yes-fallbacks
               masa inspect /path/to/output
               masa cleanup /path/to/output/masa-cleanup-log.json --yes
+              masa benchmark /path/to/takeout --workers 1,2,4
             """
         ),
         formatter_class=ColorHelpFormatter,
@@ -367,12 +412,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     cleanup_parser.add_argument(
         "--yes", action="store_true", help="Actually delete quarantined files listed in the log."
     )
+    cleanup_parser.add_argument(
+        "--trash", action="store_true", help="Move quarantined files to OS trash via Send2Trash."
+    )
     cleanup_parser.add_argument("--dry-run", action="store_true", help="Show what would be deleted.")
 
     report_parser = subparsers.add_parser(
         "report", help="Summarize a MASA report, errors file, or cleanup log.", formatter_class=ColorHelpFormatter
     )
     report_parser.add_argument("path", help="Path to a report JSON, masa-errors.json, or masa-cleanup-log.json.")
+
+    benchmark_parser = subparsers.add_parser(
+        "benchmark", help="Benchmark archive scanning and image metadata reads.", formatter_class=ColorHelpFormatter
+    )
+    benchmark_parser.add_argument("input_path", help="Path to input folder, .zip, or .tar.gz file.")
+    benchmark_parser.add_argument("--workers", default="1,2,4", help="Comma-separated worker counts (default: 1,2,4).")
+    benchmark_parser.add_argument("--limit", type=int, help="Maximum number of images to benchmark.")
+    benchmark_parser.add_argument("--output", help="Write benchmark results as JSON.")
 
     if not argv:
         parser.print_help()
@@ -752,6 +808,9 @@ def _run_inspect(args: argparse.Namespace) -> int:
 
 
 def _run_cleanup(args: argparse.Namespace) -> int:
+    if args.yes and args.trash:
+        print_error("--yes and --trash are mutually exclusive")
+        return 2
     actions = _load_json(os.path.abspath(args.cleanup_log))
     if not isinstance(actions, list):
         print_error("cleanup log must be a JSON list")
@@ -761,14 +820,25 @@ def _run_cleanup(args: argparse.Namespace) -> int:
     ]
     print(f"Quarantined files in log : {len(actions)}")
     print(f"Existing files           : {len(existing)}")
-    if not args.yes or args.dry_run:
-        print("No files deleted. Pass --yes to permanently delete listed quarantine files.")
+    if (not args.yes and not args.trash) or args.dry_run:
+        print("No files changed. Pass --yes to permanently delete or --trash to move files to OS trash.")
         return 0
-    deleted = 0
+    changed = 0
+    if args.trash:
+        try:
+            from send2trash import send2trash
+        except ImportError:
+            print_error("Send2Trash is not installed. Install with: python -m pip install '.[trash]'")
+            return 1
+        for entry in existing:
+            send2trash(entry["quarantine_path"])
+            changed += 1
+        print(f"Trashed files            : {changed}")
+        return 0
     for entry in existing:
         os.remove(entry["quarantine_path"])
-        deleted += 1
-    print(f"Deleted files            : {deleted}")
+        changed += 1
+    print(f"Deleted files            : {changed}")
     return 0
 
 
@@ -793,6 +863,91 @@ def _run_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _benchmark_one(path: str) -> dict:
+    started = time.perf_counter()
+    try:
+        from PIL import Image
+
+        sidecar = find_sidecar_json(path)
+        parse_takeout_json(sidecar) if sidecar else None
+        with Image.open(path) as img:
+            img.verify()
+            image_format = img.format
+            size = img.size
+        return {
+            "path": path,
+            "ok": True,
+            "format": image_format,
+            "dimensions": size,
+            "elapsed_seconds": time.perf_counter() - started,
+        }
+    except Exception as e:
+        return {"path": path, "ok": False, "error": str(e), "elapsed_seconds": time.perf_counter() - started}
+
+
+def _parse_worker_list(value: str) -> list[int]:
+    workers = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        worker_count = int(part)
+        if worker_count < 1:
+            raise ValueError("worker counts must be at least 1")
+        workers.append(worker_count)
+    return workers or [1]
+
+
+def _run_benchmark(args: argparse.Namespace) -> int:
+    input_path = os.path.abspath(args.input_path)
+    secure_tmp_base = tempfile.mkdtemp(prefix="masa_bench_")
+    os.chmod(secure_tmp_base, 0o700)
+    try:
+        working_dir, _ = detect_and_prepare_input(input_path, secure_tmp_base)
+        all_files = _collect_images(working_dir)
+        if args.limit is not None:
+            all_files = all_files[: args.limit]
+        worker_counts = _parse_worker_list(args.workers)
+        result = {
+            "input_path": input_path,
+            "file_count": len(all_files),
+            "benchmarks": [],
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+        for worker_count in worker_counts:
+            started = time.perf_counter()
+            if worker_count == 1:
+                items = [_benchmark_one(path) for path in all_files]
+            else:
+                with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                    items = list(executor.map(_benchmark_one, all_files))
+            elapsed = time.perf_counter() - started
+            ok_count = sum(1 for item in items if item["ok"])
+            files_per_second = len(all_files) / elapsed if elapsed else 0.0
+            row = {
+                "workers": worker_count,
+                "files": len(all_files),
+                "ok": ok_count,
+                "errors": len(all_files) - ok_count,
+                "elapsed_seconds": elapsed,
+                "files_per_second": files_per_second,
+            }
+            result["benchmarks"].append(row)
+            print(
+                f"workers={worker_count} files={len(all_files)} ok={ok_count} "
+                f"elapsed={elapsed:.3f}s rate={files_per_second:.1f}/s"
+            )
+        result["finished_at"] = datetime.now(timezone.utc).isoformat()
+        if args.output:
+            _save_json_atomic(os.path.abspath(args.output), result)
+        return 0 if all(row["errors"] == 0 for row in result["benchmarks"]) else 1
+    except Exception as e:
+        print_error(str(e))
+        return 1
+    finally:
+        shutil.rmtree(secure_tmp_base, ignore_errors=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         args = _parse_args(argv)
@@ -806,6 +961,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_cleanup(args)
     if args.command == "report":
         return _run_report(args)
+    if args.command == "benchmark":
+        return _run_benchmark(args)
     print_error("No command provided")
     return 2
 

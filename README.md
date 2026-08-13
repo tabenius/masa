@@ -30,6 +30,8 @@ delete them. Use `masa cleanup` later if you decide to delete quarantined files.
   `--no-fallbacks`, and `--fail-on-fallback` for automation.
 - Supports `--workers N` for parallel processing. Worker mode requires one of
   the noninteractive fallback flags.
+- Adds `masa benchmark` for scan/metadata-read throughput checks across worker
+  counts.
 - Avoids output filename collisions by appending numeric suffixes such as
   `-001`.
 - Supports `--resume-errors` to rerun only files listed in a previous
@@ -38,7 +40,10 @@ delete them. Use `masa cleanup` later if you decide to delete quarantined files.
   `--min-savings-percent` policies.
 - Writes JSON or YAML manifests, `masa-errors.json`, `masa-cleanup-log.json`,
   structured `--report` output, and JSON Schemas under `schemas/`.
-- Provides subcommands: `process`, `inspect`, `cleanup`, and `report`.
+- Provides subcommands: `process`, `inspect`, `cleanup`, `report`, and
+  `benchmark`.
+- Can move quarantined files to the OS trash with `masa cleanup --trash` when
+  installed with the `trash` extra.
 - Provides colored progress/help output, plus `NO_COLOR=1` and `FORCE_COLOR=1`.
 
 ## Install
@@ -49,6 +54,12 @@ Use Python 3.10 or newer.
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
+```
+
+Optional OS trash support:
+
+```bash
+python -m pip install -e ".[trash]"
 ```
 
 For development:
@@ -135,6 +146,13 @@ Review or permanently delete quarantined files:
 ```bash
 ./masa cleanup /path/to/output/masa-cleanup-log.json --dry-run
 ./masa cleanup /path/to/output/masa-cleanup-log.json --yes
+./masa cleanup /path/to/output/masa-cleanup-log.json --trash
+```
+
+Benchmark scan and metadata-read throughput:
+
+```bash
+./masa benchmark /path/to/takeout --workers 1,2,4 --output benchmark.json
 ```
 
 Disable or force color output:
@@ -239,7 +257,8 @@ Each processed file is recorded under its relative input path. Records include:
 - original filename, size, format, dimensions, and SHA-256 hash
 - output filename, size, format, and SHA-256 hash
 - `output_verified`
-- `metadata_verification`
+- `metadata_verification`, including expected/actual EXIF date and GPS match
+  checks where available
 - whether EXIF bytes were embedded
 - date used for output organization
 
@@ -305,7 +324,6 @@ folder and `masa-cleanup-log.json`.
 
 ## Remaining Improvements
 
-- Add optional OS trash integration through a dependency such as `send2trash`.
-- Add process-level benchmarks for large archives and tune `--workers` defaults.
+- Tune `--workers` defaults from benchmark data gathered on large archives.
 - Add deeper metadata comparison for formats/Pillow builds that preserve EXIF
   consistently.

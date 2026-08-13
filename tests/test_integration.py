@@ -1,5 +1,7 @@
 import json
+import sys
 import tarfile
+import types
 import zipfile
 from pathlib import Path
 
@@ -38,7 +40,9 @@ def test_directory_run_keeps_originals_and_writes_report(tmp_path: Path) -> None
     assert (input_dir / "photo.png").exists()
     assert (input_dir / "photo.png.json").exists()
     assert (output_dir / "2021" / "01" / "photo.webp").exists()
-    assert json.loads((output_dir / "masa.json").read_text(encoding="utf-8"))["records"]["photo.png"]["output_verified"]
+    record = json.loads((output_dir / "masa.json").read_text(encoding="utf-8"))["records"]["photo.png"]
+    assert record["output_verified"]
+    assert "date_matches" in record["metadata_verification"]
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["totals"]["processed"] == 1
     assert report["totals"]["errors"] == 0
@@ -252,6 +256,36 @@ def test_subcommands_inspect_report_and_cleanup(tmp_path: Path, capsys) -> None:
     assert (quarantine_dir / "photo.png").exists()
     assert main(["cleanup", str(cleanup_log), "--yes"]) == 0
     assert not (quarantine_dir / "photo.png").exists()
+
+
+def test_cleanup_trash_uses_send2trash(tmp_path: Path, monkeypatch) -> None:
+    quarantined = tmp_path / "quarantine" / "photo.png"
+    quarantined.parent.mkdir()
+    quarantined.write_bytes(b"data")
+    cleanup_log = tmp_path / "masa-cleanup-log.json"
+    cleanup_log.write_text(
+        json.dumps([{"kind": "image", "source": "/source/photo.png", "quarantine_path": str(quarantined)}]),
+        encoding="utf-8",
+    )
+    calls = []
+    fake_module = types.SimpleNamespace(send2trash=lambda path: calls.append(path))
+    monkeypatch.setitem(sys.modules, "send2trash", fake_module)
+
+    assert main(["cleanup", str(cleanup_log), "--trash"]) == 0
+    assert calls == [str(quarantined)]
+
+
+def test_benchmark_writes_json(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    output_path = tmp_path / "benchmark.json"
+    _write_png_with_sidecar(input_dir / "photo.png")
+
+    result = main(["benchmark", str(input_dir), "--workers", "1,2", "--output", str(output_path)])
+
+    assert result == 0
+    data = json.loads(output_path.read_text(encoding="utf-8"))
+    assert data["file_count"] == 1
+    assert [row["workers"] for row in data["benchmarks"]] == [1, 2]
 
 
 def test_unsafe_zip_path_is_rejected(tmp_path: Path) -> None:

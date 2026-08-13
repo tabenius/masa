@@ -7,6 +7,9 @@
 - Add JSON Schemas for manifest, errors, reports, and cleanup logs.
 - Add parallel processing with `--workers`.
 - Add `--resume-errors`, `--min-savings-percent`, and richer dry-run planning.
+- Add optional `cleanup --trash` support through the `trash` extra.
+- Add `benchmark` subcommand for worker throughput checks.
+- Add expected/actual metadata verification details for EXIF date and GPS.
 
 ## 0.2.0
 
