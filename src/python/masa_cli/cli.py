@@ -903,9 +903,6 @@ def _run_restore(args: argparse.Namespace) -> int:
     print(f"Quarantined files in log : {len(actions)}")
     print(f"Restorable files         : {len(restorable)}")
     print(f"Missing quarantined files: {missing}")
-    if args.dry_run:
-        print("No files restored.")
-        return 0
 
     restore_candidates = []
     skipped_existing = 0
@@ -927,7 +924,11 @@ def _run_restore(args: argparse.Namespace) -> int:
         restore_candidates.append(entry)
 
     restored = 0
-    if hash_mismatches or failed:
+    preflight_failed = bool(missing or skipped_existing or hash_mismatches or failed)
+    if args.dry_run:
+        print(f"Would restore files      : {len(restore_candidates) if not preflight_failed else 0}")
+        print("No files restored.")
+    elif preflight_failed:
         print_warning("Restore preflight failed. No files restored.")
     else:
         for entry in restore_candidates:
@@ -946,7 +947,7 @@ def _run_restore(args: argparse.Namespace) -> int:
     print(f"Skipped existing files   : {skipped_existing}")
     print(f"Hash mismatches          : {hash_mismatches}")
     print(f"Failed restores          : {failed}")
-    return 1 if skipped_existing or hash_mismatches or failed else 0
+    return 1 if missing or skipped_existing or hash_mismatches or failed else 0
 
 
 def _run_report(args: argparse.Namespace) -> int:

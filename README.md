@@ -339,12 +339,15 @@ to their original source paths. New cleanup logs include `source_sha256`,
 file back. Older logs without hashes still restore, but cannot detect quarantine
 file edits. If any new-log hash check fails, restore stops before moving files
 so image/sidecar pairs are not partially restored from a suspect batch.
+`--dry-run` performs the same preflight checks and exits nonzero when restore
+would be blocked.
 
 By default, restore skips source paths that already exist. `--overwrite` removes
 an existing source file before moving the quarantined file back, so use it only
 after confirming the existing source path is expendable. Hash checks verify the
 quarantined file, but they cannot decide whether a newer file at the source path
-should be kept.
+should be kept. If any source path already exists and `--overwrite` is not set,
+restore leaves the entire batch in quarantine.
 
 If outputs may have been modified or copied, `masa verify` checks manifest
 hashes and image readability.

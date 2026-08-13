@@ -319,6 +319,65 @@ def test_restore_refuses_modified_quarantined_file(tmp_path: Path, capsys) -> No
     assert "Hash mismatches          : 1" in capsys.readouterr().out
 
 
+def test_restore_dry_run_checks_hashes(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    quarantine_dir = tmp_path / "quarantine"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert (
+        main(
+            [
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-f",
+                "--quarantine-dir",
+                str(quarantine_dir),
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+    cleanup_log = output_dir / "masa-cleanup-log.json"
+    (quarantine_dir / "photo.png").write_bytes(b"modified")
+
+    assert main(["restore", str(cleanup_log), "--dry-run"]) == 1
+    assert (quarantine_dir / "photo.png").exists()
+    output = capsys.readouterr().out
+    assert "Would restore files      : 0" in output
+    assert "Hash mismatches          : 1" in output
+
+
+def test_restore_existing_source_stops_batch(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    quarantine_dir = tmp_path / "quarantine"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert (
+        main(
+            [
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-f",
+                "--quarantine-dir",
+                str(quarantine_dir),
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+    cleanup_log = output_dir / "masa-cleanup-log.json"
+    (input_dir / "photo.png").write_bytes(b"new file")
+
+    assert main(["restore", str(cleanup_log)]) == 1
+    assert (input_dir / "photo.png").read_bytes() == b"new file"
+    assert not (input_dir / "photo.png.json").exists()
+    assert (quarantine_dir / "photo.png").exists()
+    assert (quarantine_dir / "photo.png.json").exists()
+    assert "Skipped existing files   : 1" in capsys.readouterr().out
+
+
 def test_cleanup_trash_uses_send2trash(tmp_path: Path, monkeypatch) -> None:
     quarantined = tmp_path / "quarantine" / "photo.png"
     quarantined.parent.mkdir()

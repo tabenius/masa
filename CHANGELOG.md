@@ -15,6 +15,7 @@
 - Add `verify` command for manifest output hash/readability audits.
 - Add `restore` command for undoing quarantine moves from cleanup logs.
 - Add cleanup-log hashes and restore hash checks for quarantined files.
+- Make restore dry-runs run preflight checks and keep blocked restores all-or-nothing.
 
 ## 0.2.0
 
