@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from cli import _resolve_output_format, _unique_destination_path
+from masa_cli.cli import _resolve_output_format, _unique_destination_path
 
 
 def test_unique_destination_path_adds_suffix(tmp_path: Path) -> None:
@@ -32,3 +32,14 @@ def test_webp_missing_can_fall_back_to_png_for_lossless_source() -> None:
     result = _resolve_output_format("PNG", lambda format_name: False, decisions)
 
     assert result == (".png", "PNG")
+
+
+def test_fail_on_fallback_declines_missing_avif() -> None:
+    class Args:
+        yes_fallbacks = False
+        no_fallbacks = False
+        fail_on_fallback = True
+
+    result = _resolve_output_format("JPEG", lambda format_name: False, {}, Args())
+
+    assert result is None

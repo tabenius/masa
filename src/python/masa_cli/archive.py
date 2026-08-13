@@ -28,7 +28,10 @@ def _safe_extract_tar(tar_file: tarfile.TarFile, destination: str) -> None:
         target = os.path.join(destination, member.name)
         if not _is_within_directory(destination, target):
             raise ValueError(f"Unsafe TAR member path: {member.name}")
-    tar_file.extractall(destination)
+    try:
+        tar_file.extractall(destination, filter="data")
+    except TypeError:
+        tar_file.extractall(destination)
 
 
 def detect_and_prepare_input(input_path: str, temp_base_dir: str) -> tuple[str, bool]:

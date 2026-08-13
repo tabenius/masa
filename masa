@@ -6,7 +6,7 @@ import sys
 script_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(script_dir, "src", "python"))
 
-from cli import main
+from masa_cli.cli import main
 
 
 if __name__ == "__main__":

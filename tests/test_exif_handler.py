@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from exif_handler import find_sidecar_json, parse_takeout_json
+from masa_cli.exif_handler import find_sidecar_json, parse_takeout_json
 
 
 def test_find_sidecar_json_google_duplicate_pattern(tmp_path: Path) -> None:

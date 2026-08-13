@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from manifest import ManifestManager, compute_sha256
+from masa_cli.manifest import ManifestManager, compute_sha256
 
 
 def test_manifest_json_roundtrip(tmp_path: Path) -> None:

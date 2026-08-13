@@ -29,5 +29,9 @@ dist/
 # MASA runtime output
 masa.json.tmp
 masa.yaml.tmp
+masa-errors.json
+masa-cleanup-log.json
+masa-report.json
+.masa-quarantine/
 *-masa/
 *.log
