@@ -323,8 +323,19 @@ def _quarantine_originals(
             continue
         rel_path = os.path.relpath(src_path, working_dir)
         dest_path = os.path.join(quarantine_dir, rel_path)
+        source_sha256 = compute_sha256(src_path)
+        source_size = os.path.getsize(src_path)
         final_path = _move_with_unique_name(src_path, dest_path, dry_run)
-        actions.append({"kind": kind, "source": src_path, "quarantine_path": final_path})
+        actions.append(
+            {
+                "kind": kind,
+                "source": src_path,
+                "quarantine_path": final_path,
+                "source_sha256": source_sha256,
+                "quarantine_sha256": source_sha256 if dry_run else compute_sha256(final_path),
+                "size": source_size,
+            }
+        )
     return actions
 
 
@@ -880,36 +891,62 @@ def _run_restore(args: argparse.Namespace) -> int:
         print_error("cleanup log must be a JSON list")
         return 1
 
-    restorable = [
-        entry
-        for entry in actions
-        if isinstance(entry, dict)
-        and entry.get("source")
-        and entry.get("quarantine_path")
-        and os.path.exists(entry["quarantine_path"])
-    ]
+    restorable = []
+    missing = 0
+    for entry in actions:
+        if not isinstance(entry, dict) or not entry.get("source") or not entry.get("quarantine_path"):
+            continue
+        if os.path.exists(entry["quarantine_path"]):
+            restorable.append(entry)
+        else:
+            missing += 1
     print(f"Quarantined files in log : {len(actions)}")
     print(f"Restorable files         : {len(restorable)}")
+    print(f"Missing quarantined files: {missing}")
     if args.dry_run:
         print("No files restored.")
         return 0
 
-    restored = 0
-    skipped = 0
+    restore_candidates = []
+    skipped_existing = 0
+    hash_mismatches = 0
+    failed = 0
     for entry in restorable:
         source_path = entry["source"]
         quarantine_path = entry["quarantine_path"]
         if os.path.exists(source_path) and not args.overwrite:
-            skipped += 1
+            skipped_existing += 1
             continue
-        os.makedirs(os.path.dirname(source_path), exist_ok=True)
-        if os.path.exists(source_path) and args.overwrite:
-            os.remove(source_path)
-        shutil.move(quarantine_path, source_path)
-        restored += 1
+        expected_sha256 = entry.get("quarantine_sha256") or entry.get("source_sha256")
+        if expected_sha256 and compute_sha256(quarantine_path) != expected_sha256:
+            hash_mismatches += 1
+            continue
+        if os.path.exists(source_path) and args.overwrite and os.path.isdir(source_path):
+            failed += 1
+            continue
+        restore_candidates.append(entry)
+
+    restored = 0
+    if hash_mismatches or failed:
+        print_warning("Restore preflight failed. No files restored.")
+    else:
+        for entry in restore_candidates:
+            source_path = entry["source"]
+            quarantine_path = entry["quarantine_path"]
+            try:
+                os.makedirs(os.path.dirname(source_path), exist_ok=True)
+                if os.path.exists(source_path) and args.overwrite:
+                    os.remove(source_path)
+                shutil.move(quarantine_path, source_path)
+                restored += 1
+            except Exception as e:
+                print_warning(f"Could not restore {quarantine_path}: {e}")
+                failed += 1
     print(f"Restored files           : {restored}")
-    print(f"Skipped existing files   : {skipped}")
-    return 1 if skipped else 0
+    print(f"Skipped existing files   : {skipped_existing}")
+    print(f"Hash mismatches          : {hash_mismatches}")
+    print(f"Failed restores          : {failed}")
+    return 1 if skipped_existing or hash_mismatches or failed else 0
 
 
 def _run_report(args: argparse.Namespace) -> int:

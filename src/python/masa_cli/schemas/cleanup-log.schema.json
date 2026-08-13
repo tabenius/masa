@@ -9,7 +9,10 @@
     "properties": {
       "kind": {"type": "string"},
       "source": {"type": "string"},
-      "quarantine_path": {"type": "string"}
+      "quarantine_path": {"type": "string"},
+      "source_sha256": {"type": "string"},
+      "quarantine_sha256": {"type": "string"},
+      "size": {"type": "integer", "minimum": 0}
     },
     "additionalProperties": true
   }

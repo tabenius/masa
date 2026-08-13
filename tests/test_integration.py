@@ -75,6 +75,9 @@ def test_quarantine_mode_moves_originals_and_sidecars(tmp_path: Path) -> None:
     assert (quarantine_dir / "photo.png.json").exists()
     cleanup_log = json.loads((output_dir / "masa-cleanup-log.json").read_text(encoding="utf-8"))
     assert {entry["kind"] for entry in cleanup_log} == {"image", "sidecar"}
+    for entry in cleanup_log:
+        assert entry["source_sha256"] == entry["quarantine_sha256"]
+        assert entry["size"] > 0
 
 
 def test_collision_safe_output_names(tmp_path: Path) -> None:
@@ -286,6 +289,36 @@ def test_restore_quarantined_files(tmp_path: Path) -> None:
     assert not (quarantine_dir / "photo.png").exists()
 
 
+def test_restore_refuses_modified_quarantined_file(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    quarantine_dir = tmp_path / "quarantine"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert (
+        main(
+            [
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-f",
+                "--quarantine-dir",
+                str(quarantine_dir),
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+    cleanup_log = output_dir / "masa-cleanup-log.json"
+    (quarantine_dir / "photo.png").write_bytes(b"modified")
+
+    assert main(["restore", str(cleanup_log)]) == 1
+    assert not (input_dir / "photo.png").exists()
+    assert not (input_dir / "photo.png.json").exists()
+    assert (quarantine_dir / "photo.png").exists()
+    assert (quarantine_dir / "photo.png.json").exists()
+    assert "Hash mismatches          : 1" in capsys.readouterr().out
+
+
 def test_cleanup_trash_uses_send2trash(tmp_path: Path, monkeypatch) -> None:
     quarantined = tmp_path / "quarantine" / "photo.png"
     quarantined.parent.mkdir()
@@ -335,6 +368,32 @@ def test_validate_accepts_manifest(tmp_path: Path, capsys) -> None:
 
     assert result == 0
     assert "valid manifest" in capsys.readouterr().out
+
+
+def test_validate_accepts_cleanup_log_with_hashes(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    quarantine_dir = tmp_path / "quarantine"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert (
+        main(
+            [
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-f",
+                "--quarantine-dir",
+                str(quarantine_dir),
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+
+    result = main(["validate", str(output_dir / "masa-cleanup-log.json")])
+
+    assert result == 0
+    assert "valid cleanup" in capsys.readouterr().out
 
 
 def test_validate_rejects_invalid_errors_file(tmp_path: Path, capsys) -> None:

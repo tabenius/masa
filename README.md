@@ -40,6 +40,8 @@ delete them. Use `masa cleanup` later if you decide to delete quarantined files.
   `--min-savings-percent` policies.
 - Writes JSON or YAML manifests, `masa-errors.json`, `masa-cleanup-log.json`,
   structured `--report` output, and JSON Schemas under `schemas/`.
+- Records SHA-256 hashes for quarantined originals and verifies them before
+  `masa restore` moves files back.
 - Provides subcommands: `process`, `inspect`, `cleanup`, `restore`, `report`,
   `benchmark`, `doctor`, `validate`, and `verify`.
 - Can move quarantined files to the OS trash with `masa cleanup --trash` when
@@ -160,6 +162,7 @@ Restore quarantined originals and sidecars:
 ```bash
 ./masa restore /path/to/output/masa-cleanup-log.json --dry-run
 ./masa restore /path/to/output/masa-cleanup-log.json
+./masa restore /path/to/output/masa-cleanup-log.json --overwrite
 ```
 
 Verify output files against the manifest:
@@ -331,8 +334,20 @@ Permanent deletion is handled by `masa cleanup` after reviewing the quarantine
 folder and `masa-cleanup-log.json`.
 
 If a quarantine run was premature, `masa restore` moves quarantined files back
-to their original source paths. If outputs may have been modified or copied,
-`masa verify` checks manifest hashes and image readability.
+to their original source paths. New cleanup logs include `source_sha256`,
+`quarantine_sha256`, and `size`; restore checks those hashes before moving a
+file back. Older logs without hashes still restore, but cannot detect quarantine
+file edits. If any new-log hash check fails, restore stops before moving files
+so image/sidecar pairs are not partially restored from a suspect batch.
+
+By default, restore skips source paths that already exist. `--overwrite` removes
+an existing source file before moving the quarantined file back, so use it only
+after confirming the existing source path is expendable. Hash checks verify the
+quarantined file, but they cannot decide whether a newer file at the source path
+should be kept.
+
+If outputs may have been modified or copied, `masa verify` checks manifest
+hashes and image readability.
 
 ## Project Structure
 
