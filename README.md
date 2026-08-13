@@ -331,7 +331,11 @@ Quarantine is still a migration action. Before large archival runs:
   mandatory
 
 Permanent deletion is handled by `masa cleanup` after reviewing the quarantine
-folder and `masa-cleanup-log.json`.
+folder and `masa-cleanup-log.json`. New cleanup logs with hashes are checked
+before `cleanup --yes` or `cleanup --trash` changes files. If any quarantined
+file is missing, modified, or represented by an invalid log entry, cleanup
+stops before deleting or trashing anything. `cleanup --dry-run` performs the
+same preflight checks.
 
 If a quarantine run was premature, `masa restore` moves quarantined files back
 to their original source paths. New cleanup logs include `source_sha256`,

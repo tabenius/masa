@@ -395,6 +395,63 @@ def test_cleanup_trash_uses_send2trash(tmp_path: Path, monkeypatch) -> None:
     assert calls == [str(quarantined)]
 
 
+def test_cleanup_refuses_modified_quarantined_file(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    quarantine_dir = tmp_path / "quarantine"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert (
+        main(
+            [
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-f",
+                "--quarantine-dir",
+                str(quarantine_dir),
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+    cleanup_log = output_dir / "masa-cleanup-log.json"
+    (quarantine_dir / "photo.png").write_bytes(b"modified")
+
+    assert main(["cleanup", str(cleanup_log), "--yes"]) == 1
+    assert (quarantine_dir / "photo.png").exists()
+    assert (quarantine_dir / "photo.png.json").exists()
+    output = capsys.readouterr().out
+    assert "Hash mismatches          : 1" in output
+    assert "Cleanup preflight failed. No files deleted or trashed." in output
+
+
+def test_cleanup_dry_run_checks_hashes(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    quarantine_dir = tmp_path / "quarantine"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert (
+        main(
+            [
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-f",
+                "--quarantine-dir",
+                str(quarantine_dir),
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+    cleanup_log = output_dir / "masa-cleanup-log.json"
+    (quarantine_dir / "photo.png").write_bytes(b"modified")
+
+    assert main(["cleanup", str(cleanup_log), "--dry-run"]) == 1
+    assert (quarantine_dir / "photo.png").exists()
+    assert "Hash mismatches          : 1" in capsys.readouterr().out
+
+
 def test_benchmark_writes_json(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     output_path = tmp_path / "benchmark.json"

@@ -16,6 +16,7 @@
 - Add `restore` command for undoing quarantine moves from cleanup logs.
 - Add cleanup-log hashes and restore hash checks for quarantined files.
 - Make restore dry-runs run preflight checks and keep blocked restores all-or-nothing.
+- Make cleanup dry-runs and destructive cleanup verify quarantine hashes first.
 
 ## 0.2.0
 

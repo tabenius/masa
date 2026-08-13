@@ -850,6 +850,24 @@ def _run_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _preflight_cleanup_log(actions: list) -> dict:
+    result = {"entries": [], "missing": 0, "hash_mismatches": 0, "invalid": 0}
+    for entry in actions:
+        if not isinstance(entry, dict) or not entry.get("quarantine_path"):
+            result["invalid"] += 1
+            continue
+        quarantine_path = entry["quarantine_path"]
+        if not os.path.exists(quarantine_path):
+            result["missing"] += 1
+            continue
+        expected_sha256 = entry.get("quarantine_sha256") or entry.get("source_sha256")
+        if expected_sha256 and compute_sha256(quarantine_path) != expected_sha256:
+            result["hash_mismatches"] += 1
+            continue
+        result["entries"].append(entry)
+    return result
+
+
 def _run_cleanup(args: argparse.Namespace) -> int:
     if args.yes and args.trash:
         print_error("--yes and --trash are mutually exclusive")
@@ -858,14 +876,20 @@ def _run_cleanup(args: argparse.Namespace) -> int:
     if not isinstance(actions, list):
         print_error("cleanup log must be a JSON list")
         return 1
-    existing = [
-        entry for entry in actions if isinstance(entry, dict) and os.path.exists(entry.get("quarantine_path", ""))
-    ]
+    preflight = _preflight_cleanup_log(actions)
+    entries = preflight["entries"]
+    blocked = bool(preflight["missing"] or preflight["hash_mismatches"] or preflight["invalid"])
     print(f"Quarantined files in log : {len(actions)}")
-    print(f"Existing files           : {len(existing)}")
+    print(f"Verified files           : {len(entries)}")
+    print(f"Missing quarantined files: {preflight['missing']}")
+    print(f"Hash mismatches          : {preflight['hash_mismatches']}")
+    print(f"Invalid log entries      : {preflight['invalid']}")
     if (not args.yes and not args.trash) or args.dry_run:
         print("No files changed. Pass --yes to permanently delete or --trash to move files to OS trash.")
-        return 0
+        return 1 if blocked else 0
+    if blocked:
+        print_warning("Cleanup preflight failed. No files deleted or trashed.")
+        return 1
     changed = 0
     if args.trash:
         try:
@@ -873,12 +897,12 @@ def _run_cleanup(args: argparse.Namespace) -> int:
         except ImportError:
             print_error("Send2Trash is not installed. Install with: python -m pip install '.[trash]'")
             return 1
-        for entry in existing:
+        for entry in entries:
             send2trash(entry["quarantine_path"])
             changed += 1
         print(f"Trashed files            : {changed}")
         return 0
-    for entry in existing:
+    for entry in entries:
         os.remove(entry["quarantine_path"])
         changed += 1
     print(f"Deleted files            : {changed}")
@@ -891,22 +915,17 @@ def _run_restore(args: argparse.Namespace) -> int:
         print_error("cleanup log must be a JSON list")
         return 1
 
-    restorable = []
-    missing = 0
-    for entry in actions:
-        if not isinstance(entry, dict) or not entry.get("source") or not entry.get("quarantine_path"):
-            continue
-        if os.path.exists(entry["quarantine_path"]):
-            restorable.append(entry)
-        else:
-            missing += 1
+    preflight = _preflight_cleanup_log(actions)
+    restorable = [entry for entry in preflight["entries"] if entry.get("source")]
+    invalid = preflight["invalid"] + (len(preflight["entries"]) - len(restorable))
     print(f"Quarantined files in log : {len(actions)}")
     print(f"Restorable files         : {len(restorable)}")
-    print(f"Missing quarantined files: {missing}")
+    print(f"Missing quarantined files: {preflight['missing']}")
+    print(f"Invalid log entries      : {invalid}")
 
     restore_candidates = []
     skipped_existing = 0
-    hash_mismatches = 0
+    hash_mismatches = preflight["hash_mismatches"]
     failed = 0
     for entry in restorable:
         source_path = entry["source"]
@@ -914,17 +933,13 @@ def _run_restore(args: argparse.Namespace) -> int:
         if os.path.exists(source_path) and not args.overwrite:
             skipped_existing += 1
             continue
-        expected_sha256 = entry.get("quarantine_sha256") or entry.get("source_sha256")
-        if expected_sha256 and compute_sha256(quarantine_path) != expected_sha256:
-            hash_mismatches += 1
-            continue
         if os.path.exists(source_path) and args.overwrite and os.path.isdir(source_path):
             failed += 1
             continue
         restore_candidates.append(entry)
 
     restored = 0
-    preflight_failed = bool(missing or skipped_existing or hash_mismatches or failed)
+    preflight_failed = bool(preflight["missing"] or invalid or skipped_existing or hash_mismatches or failed)
     if args.dry_run:
         print(f"Would restore files      : {len(restore_candidates) if not preflight_failed else 0}")
         print("No files restored.")
@@ -947,7 +962,7 @@ def _run_restore(args: argparse.Namespace) -> int:
     print(f"Skipped existing files   : {skipped_existing}")
     print(f"Hash mismatches          : {hash_mismatches}")
     print(f"Failed restores          : {failed}")
-    return 1 if missing or skipped_existing or hash_mismatches or failed else 0
+    return 1 if preflight["missing"] or invalid or skipped_existing or hash_mismatches or failed else 0
 
 
 def _run_report(args: argparse.Namespace) -> int:
