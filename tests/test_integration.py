@@ -259,6 +259,33 @@ def test_subcommands_inspect_report_and_cleanup(tmp_path: Path, capsys) -> None:
     assert not (quarantine_dir / "photo.png").exists()
 
 
+def test_restore_quarantined_files(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    quarantine_dir = tmp_path / "quarantine"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert (
+        main(
+            [
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-f",
+                "--quarantine-dir",
+                str(quarantine_dir),
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+    cleanup_log = output_dir / "masa-cleanup-log.json"
+
+    assert main(["restore", str(cleanup_log)]) == 0
+    assert (input_dir / "photo.png").exists()
+    assert (input_dir / "photo.png.json").exists()
+    assert not (quarantine_dir / "photo.png").exists()
+
+
 def test_cleanup_trash_uses_send2trash(tmp_path: Path, monkeypatch) -> None:
     quarantined = tmp_path / "quarantine" / "photo.png"
     quarantined.parent.mkdir()
@@ -318,6 +345,28 @@ def test_validate_rejects_invalid_errors_file(tmp_path: Path, capsys) -> None:
 
     assert result == 1
     assert "invalid errors" in capsys.readouterr().out
+
+
+def test_verify_manifest_outputs(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert main([str(input_dir), "-o", str(output_dir), "--quiet"]) == 0
+
+    assert main(["verify", str(output_dir)]) == 0
+    assert "OK      : 1" in capsys.readouterr().out
+
+
+def test_verify_detects_hash_mismatch(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert main([str(input_dir), "-o", str(output_dir), "--quiet"]) == 0
+    output_file = output_dir / "2021" / "photo.webp"
+    output_file.write_bytes(b"corrupted")
+
+    assert main(["verify", str(output_dir)]) == 1
+    assert "output sha256 mismatch" in capsys.readouterr().out
 
 
 def test_packaged_schemas_are_available() -> None:

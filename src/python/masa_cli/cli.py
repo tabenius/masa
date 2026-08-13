@@ -20,7 +20,7 @@ from masa_cli.ui import print_error, print_warning, render_progress
 
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif", ".bmp", ".gif"}
 LOSSLESS_SOURCE_FORMATS = {"PNG", "GIF", "WEBP", "TIFF", "TIF", "BMP"}
-SUBCOMMANDS = {"process", "inspect", "cleanup", "report", "benchmark", "doctor", "validate"}
+SUBCOMMANDS = {"process", "inspect", "cleanup", "restore", "report", "benchmark", "doctor", "validate", "verify"}
 
 BOLD = "\033[1m"
 CYAN = "\033[36m"
@@ -390,6 +390,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
               masa /path/to/takeout.zip --by-month --workers 4 --yes-fallbacks
               masa inspect /path/to/output
               masa cleanup /path/to/output/masa-cleanup-log.json --yes
+              masa restore /path/to/output/masa-cleanup-log.json
+              masa verify /path/to/output
               masa benchmark /path/to/takeout --workers 1,2,4
               masa doctor
               masa validate /path/to/output/masa.json
@@ -421,6 +423,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     cleanup_parser.add_argument("--dry-run", action="store_true", help="Show what would be deleted.")
 
+    restore_parser = subparsers.add_parser(
+        "restore", help="Restore quarantined files from a cleanup log.", formatter_class=ColorHelpFormatter
+    )
+    restore_parser.add_argument("cleanup_log", help="Path to masa-cleanup-log.json.")
+    restore_parser.add_argument("--dry-run", action="store_true", help="Show what would be restored.")
+    restore_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing source paths.")
+
     report_parser = subparsers.add_parser(
         "report", help="Summarize a MASA report, errors file, or cleanup log.", formatter_class=ColorHelpFormatter
     )
@@ -446,6 +455,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     validate_parser.add_argument(
         "--kind", choices=["auto", "manifest", "errors", "report", "cleanup"], default="auto", help="Schema kind."
     )
+
+    verify_parser = subparsers.add_parser(
+        "verify", help="Verify manifest output files, hashes, and readability.", formatter_class=ColorHelpFormatter
+    )
+    verify_parser.add_argument("path", help="Output directory, masa.json, or masa.yaml.")
+    verify_parser.add_argument("--json", action="store_true", help="Write verification results as JSON.")
 
     if not argv:
         parser.print_help()
@@ -859,6 +874,44 @@ def _run_cleanup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_restore(args: argparse.Namespace) -> int:
+    actions = _load_json(os.path.abspath(args.cleanup_log))
+    if not isinstance(actions, list):
+        print_error("cleanup log must be a JSON list")
+        return 1
+
+    restorable = [
+        entry
+        for entry in actions
+        if isinstance(entry, dict)
+        and entry.get("source")
+        and entry.get("quarantine_path")
+        and os.path.exists(entry["quarantine_path"])
+    ]
+    print(f"Quarantined files in log : {len(actions)}")
+    print(f"Restorable files         : {len(restorable)}")
+    if args.dry_run:
+        print("No files restored.")
+        return 0
+
+    restored = 0
+    skipped = 0
+    for entry in restorable:
+        source_path = entry["source"]
+        quarantine_path = entry["quarantine_path"]
+        if os.path.exists(source_path) and not args.overwrite:
+            skipped += 1
+            continue
+        os.makedirs(os.path.dirname(source_path), exist_ok=True)
+        if os.path.exists(source_path) and args.overwrite:
+            os.remove(source_path)
+        shutil.move(quarantine_path, source_path)
+        restored += 1
+    print(f"Restored files           : {restored}")
+    print(f"Skipped existing files   : {skipped}")
+    return 1 if skipped else 0
+
+
 def _run_report(args: argparse.Namespace) -> int:
     data = _load_json(os.path.abspath(args.path))
     if isinstance(data, dict) and "totals" in data:
@@ -878,6 +931,67 @@ def _run_report(args: argparse.Namespace) -> int:
         print_error("Unrecognized MASA report file")
         return 1
     return 0
+
+
+def _verify_manifest_record(output_dir: str, rel_input_path: str, record: dict) -> dict:
+    result = {
+        "input_file_name": rel_input_path,
+        "output_file_name": record.get("output_file_name"),
+        "ok": False,
+        "errors": [],
+    }
+    output_file_name = record.get("output_file_name")
+    if not output_file_name:
+        result["errors"].append("missing output_file_name")
+        return result
+
+    output_path = os.path.join(output_dir, output_file_name)
+    if not os.path.exists(output_path):
+        result["errors"].append("output file missing")
+        return result
+
+    expected_sha256 = record.get("output_sha256")
+    if expected_sha256:
+        actual_sha256 = compute_sha256(output_path)
+        if actual_sha256 != expected_sha256:
+            result["errors"].append("output sha256 mismatch")
+
+    expected_format = record.get("output_format")
+    if expected_format:
+        readable, error = _verify_output(output_path, expected_format)
+        if not readable:
+            result["errors"].append(f"output unreadable: {error}")
+
+    result["ok"] = not result["errors"]
+    return result
+
+
+def _run_verify(args: argparse.Namespace) -> int:
+    manifest_path, format_type = _find_manifest(os.path.abspath(args.path))
+    output_dir = os.path.dirname(manifest_path)
+    manager = ManifestManager(output_dir, format_type)
+    results = [
+        _verify_manifest_record(output_dir, rel_input_path, record)
+        for rel_input_path, record in sorted(manager.records.items())
+    ]
+    summary = {
+        "manifest": manifest_path,
+        "records": len(results),
+        "ok": sum(1 for item in results if item["ok"]),
+        "errors": sum(1 for item in results if not item["ok"]),
+        "results": results,
+    }
+    if args.json:
+        print(json.dumps(summary, indent=2))
+    else:
+        print(f"Manifest: {manifest_path}")
+        print(f"Records : {summary['records']}")
+        print(f"OK      : {summary['ok']}")
+        print(f"Errors  : {summary['errors']}")
+        for item in results:
+            if not item["ok"]:
+                print(f"- {item['input_file_name']}: {', '.join(item['errors'])}")
+    return 1 if summary["errors"] else 0
 
 
 def _benchmark_one(path: str) -> dict:
@@ -1118,6 +1232,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_inspect(args)
     if args.command == "cleanup":
         return _run_cleanup(args)
+    if args.command == "restore":
+        return _run_restore(args)
     if args.command == "report":
         return _run_report(args)
     if args.command == "benchmark":
@@ -1126,6 +1242,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_doctor(args)
     if args.command == "validate":
         return _run_validate(args)
+    if args.command == "verify":
+        return _run_verify(args)
     print_error("No command provided")
     return 2
 

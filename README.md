@@ -40,8 +40,8 @@ delete them. Use `masa cleanup` later if you decide to delete quarantined files.
   `--min-savings-percent` policies.
 - Writes JSON or YAML manifests, `masa-errors.json`, `masa-cleanup-log.json`,
   structured `--report` output, and JSON Schemas under `schemas/`.
-- Provides subcommands: `process`, `inspect`, `cleanup`, `report`,
-  `benchmark`, `doctor`, and `validate`.
+- Provides subcommands: `process`, `inspect`, `cleanup`, `restore`, `report`,
+  `benchmark`, `doctor`, `validate`, and `verify`.
 - Can move quarantined files to the OS trash with `masa cleanup --trash` when
   installed with the `trash` extra.
 - Provides colored progress/help output, plus `NO_COLOR=1` and `FORCE_COLOR=1`.
@@ -153,6 +153,20 @@ Review or permanently delete quarantined files:
 ./masa cleanup /path/to/output/masa-cleanup-log.json --dry-run
 ./masa cleanup /path/to/output/masa-cleanup-log.json --yes
 ./masa cleanup /path/to/output/masa-cleanup-log.json --trash
+```
+
+Restore quarantined originals and sidecars:
+
+```bash
+./masa restore /path/to/output/masa-cleanup-log.json --dry-run
+./masa restore /path/to/output/masa-cleanup-log.json
+```
+
+Verify output files against the manifest:
+
+```bash
+./masa verify /path/to/output
+./masa verify /path/to/output --json
 ```
 
 Benchmark scan and metadata-read throughput:
@@ -315,6 +329,10 @@ Quarantine is still a migration action. Before large archival runs:
 
 Permanent deletion is handled by `masa cleanup` after reviewing the quarantine
 folder and `masa-cleanup-log.json`.
+
+If a quarantine run was premature, `masa restore` moves quarantined files back
+to their original source paths. If outputs may have been modified or copied,
+`masa verify` checks manifest hashes and image readability.
 
 ## Project Structure
 

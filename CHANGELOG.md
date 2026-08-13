@@ -12,6 +12,8 @@
 - Add expected/actual metadata verification details for EXIF date and GPS.
 - Add `doctor` command for dependency and encoder diagnostics.
 - Add `validate` command for MASA JSON files, backed by bundled schemas.
+- Add `verify` command for manifest output hash/readability audits.
+- Add `restore` command for undoing quarantine moves from cleanup logs.
 
 ## 0.2.0
 
