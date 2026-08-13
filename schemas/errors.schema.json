@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tabenius/masa/schemas/errors.schema.json",
+  "title": "MASA Errors",
+  "type": "object",
+  "required": ["errors"],
+  "properties": {
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["input_file_name", "stage", "message"],
+        "properties": {
+          "input_file_name": {"type": "string"},
+          "stage": {"type": "string"},
+          "message": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}

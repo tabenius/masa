@@ -1,0 +1,3 @@
+include CHANGELOG.md
+recursive-include schemas *.json
+recursive-include scripts *.sh

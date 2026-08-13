@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tabenius/masa/schemas/manifest.schema.json",
+  "title": "MASA Manifest",
+  "type": "object",
+  "required": ["records"],
+  "properties": {
+    "records": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "input_file_name",
+          "original_sha256",
+          "original_size",
+          "original_format",
+          "output_file_name",
+          "output_sha256",
+          "output_size",
+          "output_format",
+          "output_verified",
+          "date_taken"
+        ],
+        "properties": {
+          "input_file_name": {"type": "string"},
+          "original_sha256": {"type": "string"},
+          "original_size": {"type": "integer", "minimum": 0},
+          "original_format": {"type": ["string", "null"]},
+          "original_dimensions": {
+            "type": "array",
+            "prefixItems": [{"type": "integer"}, {"type": "integer"}],
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "output_file_name": {"type": "string"},
+          "output_sha256": {"type": "string"},
+          "output_size": {"type": "integer", "minimum": 0},
+          "output_format": {"type": "string"},
+          "output_verified": {"type": "boolean"},
+          "metadata_verification": {"type": "object"},
+          "exif_tags_kept": {"type": "boolean"},
+          "date_taken": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}

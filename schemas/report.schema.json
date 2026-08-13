@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tabenius/masa/schemas/report.schema.json",
+  "title": "MASA Run Report",
+  "type": "object",
+  "required": ["input_path", "output_dir", "dry_run", "started_at", "finished_at", "totals"],
+  "properties": {
+    "input_path": {"type": "string"},
+    "output_dir": {"type": "string"},
+    "quarantine_dir": {"type": ["string", "null"]},
+    "dry_run": {"type": "boolean"},
+    "started_at": {"type": "string"},
+    "finished_at": {"type": ["string", "null"]},
+    "fallback_decisions": {"type": "object"},
+    "planned": {"type": "array"},
+    "processed": {"type": "array"},
+    "errors": {"type": "array"},
+    "quarantine_actions": {"type": "array"},
+    "totals": {
+      "type": "object",
+      "required": [
+        "total_files",
+        "planned",
+        "processed",
+        "skipped_manifest",
+        "skipped_policy",
+        "errors",
+        "quarantined_files",
+        "original_bytes",
+        "output_bytes"
+      ],
+      "properties": {
+        "total_files": {"type": "integer"},
+        "planned": {"type": "integer"},
+        "processed": {"type": "integer"},
+        "skipped_manifest": {"type": "integer"},
+        "skipped_policy": {"type": "integer"},
+        "errors": {"type": "integer"},
+        "quarantined_files": {"type": "integer"},
+        "original_bytes": {"type": "integer"},
+        "output_bytes": {"type": "integer"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

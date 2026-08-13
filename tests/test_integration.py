@@ -3,10 +3,9 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from PIL import Image
-
 import masa_cli.cli as cli
 from masa_cli.cli import main
+from PIL import Image
 
 
 def _write_png_with_sidecar(path: Path, color: tuple[int, int, int] = (40, 120, 200)) -> None:
@@ -39,12 +38,11 @@ def test_directory_run_keeps_originals_and_writes_report(tmp_path: Path) -> None
     assert (input_dir / "photo.png").exists()
     assert (input_dir / "photo.png.json").exists()
     assert (output_dir / "2021" / "01" / "photo.webp").exists()
-    assert json.loads((output_dir / "masa.json").read_text(encoding="utf-8"))["records"]["photo.png"][
-        "output_verified"
-    ]
+    assert json.loads((output_dir / "masa.json").read_text(encoding="utf-8"))["records"]["photo.png"]["output_verified"]
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["totals"]["processed"] == 1
     assert report["totals"]["errors"] == 0
+    assert report["planned"][0]["output_file_name"] == "2021/01/photo.webp"
 
 
 def test_quarantine_mode_moves_originals_and_sidecars(tmp_path: Path) -> None:
@@ -153,3 +151,126 @@ def test_skip_if_larger_discards_output(tmp_path: Path, monkeypatch) -> None:
     assert not (output_dir / "2021" / "photo.webp").exists()
     errors = json.loads((output_dir / "masa-errors.json").read_text(encoding="utf-8"))["errors"]
     assert errors[0]["stage"] == "size-policy"
+
+
+def test_min_savings_percent_discards_small_savings(tmp_path: Path, monkeypatch) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _write_png_with_sidecar(input_dir / "photo.png")
+
+    def fake_process_single_image(input_path, max_dim, quality, exif_bytes, output_format=None):
+        temp_path = tmp_path / "same-ish.webp"
+        temp_path.write_bytes(b"x" * 79)
+        return str(temp_path), ".webp", "WEBP"
+
+    monkeypatch.setattr("masa_cli.image_processor.process_single_image", fake_process_single_image)
+    monkeypatch.setattr(cli, "_verify_output", lambda path, expected_format: (True, ""))
+
+    result = main([str(input_dir), "-o", str(output_dir), "--min-savings-percent", "50", "--quiet"])
+
+    assert result == 1
+    errors = json.loads((output_dir / "masa-errors.json").read_text(encoding="utf-8"))["errors"]
+    assert errors[0]["stage"] == "size-policy"
+
+
+def test_resume_errors_only_reruns_listed_file(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    errors_path = tmp_path / "errors.json"
+    _write_png_with_sidecar(input_dir / "a.png")
+    _write_png_with_sidecar(input_dir / "b.png")
+    errors_path.write_text(
+        json.dumps({"errors": [{"input_file_name": "b.png", "stage": "tagging", "message": "old"}]}), encoding="utf-8"
+    )
+
+    result = main([str(input_dir), "-o", str(output_dir), "--resume-errors", str(errors_path), "--quiet"])
+
+    assert result == 0
+    manifest = json.loads((output_dir / "masa.json").read_text(encoding="utf-8"))
+    assert sorted(manifest["records"]) == ["b.png"]
+
+
+def test_workers_process_multiple_files(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _write_png_with_sidecar(input_dir / "a.png")
+    _write_png_with_sidecar(input_dir / "b.png")
+
+    result = main([str(input_dir), "-o", str(output_dir), "--workers", "2", "--yes-fallbacks", "--quiet"])
+
+    assert result == 0
+    manifest = json.loads((output_dir / "masa.json").read_text(encoding="utf-8"))
+    assert sorted(manifest["records"]) == ["a.png", "b.png"]
+
+
+def test_dry_run_report_contains_plan_without_outputs(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    report_path = tmp_path / "dry-report.json"
+    _write_png_with_sidecar(input_dir / "photo.png")
+
+    result = main([str(input_dir), "-o", str(output_dir), "--dry-run", "--report", str(report_path), "--quiet"])
+
+    assert result == 0
+    assert not output_dir.exists()
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["dry_run"] is True
+    assert report["totals"]["planned"] == 1
+    assert report["planned"][0]["output_file_name"] == "2021/photo.webp"
+
+
+def test_subcommands_inspect_report_and_cleanup(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    report_path = tmp_path / "report.json"
+    quarantine_dir = tmp_path / "quarantine"
+    _write_png_with_sidecar(input_dir / "photo.png")
+
+    assert (
+        main(
+            [
+                "process",
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-f",
+                "--quarantine-dir",
+                str(quarantine_dir),
+                "--report",
+                str(report_path),
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+    assert main(["inspect", str(output_dir)]) == 0
+    assert "Records : 1" in capsys.readouterr().out
+    assert main(["report", str(report_path)]) == 0
+    assert "MASA SUMMARY REPORT" in capsys.readouterr().out
+    cleanup_log = output_dir / "masa-cleanup-log.json"
+    assert main(["cleanup", str(cleanup_log), "--dry-run"]) == 0
+    assert (quarantine_dir / "photo.png").exists()
+    assert main(["cleanup", str(cleanup_log), "--yes"]) == 0
+    assert not (quarantine_dir / "photo.png").exists()
+
+
+def test_unsafe_zip_path_is_rejected(tmp_path: Path) -> None:
+    archive_path = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.writestr("../escape.png", b"bad")
+
+    result = main([str(archive_path), "-o", str(tmp_path / "out"), "--quiet"])
+
+    assert result == 1
+
+
+def test_unsafe_tar_path_is_rejected(tmp_path: Path) -> None:
+    archive_path = tmp_path / "unsafe.tar"
+    payload = tmp_path / "payload.png"
+    payload.write_bytes(b"bad")
+    with tarfile.open(archive_path, "w") as tf:
+        tf.add(payload, "../escape.png")
+
+    result = main([str(archive_path), "-o", str(tmp_path / "out"), "--quiet"])
+
+    assert result == 1

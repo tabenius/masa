@@ -36,7 +36,7 @@ def find_sidecar_json(image_path: str) -> str | None:
 
 def parse_takeout_json(json_path: str) -> tuple[datetime | None, float, float, dict]:
     try:
-        with open(json_path, "r", encoding="utf-8") as f:
+        with open(json_path, encoding="utf-8") as f:
             data = json.load(f)
 
         taken_time = None

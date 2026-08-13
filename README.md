@@ -7,7 +7,7 @@ formats, verifies the written files, and records cryptographic manifests.
 
 MASA keeps originals by default. `-f/--quarantine-originals` moves originals and
 sidecars to a quarantine folder after verified output; it does not permanently
-delete them.
+delete them. Use `masa cleanup` later if you decide to delete quarantined files.
 
 ## Features
 
@@ -20,24 +20,25 @@ delete them.
 - Uses timezone-aware UTC `photoTakenTime.timestamp` values from sidecars, with
   file modification time as a fallback.
 - Embeds EXIF date fields and GPS coordinates when `piexif` can encode them.
+- Verifies final image readability and performs best-effort EXIF presence checks
+  where output formats support EXIF.
 - Downscales images to a configurable maximum dimension.
 - Converts JPEG/JPG to AVIF when AVIF support is available.
 - Converts PNG, GIF, WEBP, TIFF/TIF, and BMP to lossless WEBP when WEBP support
   is available.
-- Prompts for JPEG fallback at slightly lower quality when AVIF is unavailable.
-- Prompts for optimized palette PNG fallback when WEBP is unavailable for
-  lossless-style inputs.
-- Supports `--yes-fallbacks`, `--no-fallbacks`, and `--fail-on-fallback` for
-  noninteractive runs.
+- Supports interactive fallback prompts plus `--yes-fallbacks`,
+  `--no-fallbacks`, and `--fail-on-fallback` for automation.
+- Supports `--workers N` for parallel processing. Worker mode requires one of
+  the noninteractive fallback flags.
 - Avoids output filename collisions by appending numeric suffixes such as
   `-001`.
-- Verifies copied outputs by comparing temp/destination hashes and reopening the
-  final image before manifesting or quarantining originals.
-- Optionally skips outputs larger than the source with `--skip-if-larger`.
-- Writes resumable JSON or YAML manifests.
-- Writes `masa-errors.json` for failed files and `masa-cleanup-log.json` for
-  quarantined originals.
-- Writes structured run reports with `--report`.
+- Supports `--resume-errors` to rerun only files listed in a previous
+  `masa-errors.json`.
+- Supports `--skip-if-larger`, `--keep-if-larger`, and
+  `--min-savings-percent` policies.
+- Writes JSON or YAML manifests, `masa-errors.json`, `masa-cleanup-log.json`,
+  structured `--report` output, and JSON Schemas under `schemas/`.
+- Provides subcommands: `process`, `inspect`, `cleanup`, and `report`.
 - Provides colored progress/help output, plus `NO_COLOR=1` and `FORCE_COLOR=1`.
 
 ## Install
@@ -50,12 +51,16 @@ python3 -m venv .venv
 python -m pip install -e .
 ```
 
-For development and tests:
+For development:
 
 ```bash
 python -m pip install -e ".[dev]"
-python -m pytest
+./scripts/ci.sh
+./scripts/release-check.sh
 ```
+
+There are intentionally no GitHub Actions in this repository right now, to avoid
+using billed GitHub CI minutes. The scripts above are the local CI/release gate.
 
 AVIF output depends on `pillow-avif-plugin`, which is listed in the project
 dependencies. If AVIF is unavailable at runtime, MASA can fall back to JPEG.
@@ -66,43 +71,70 @@ Show help:
 
 ```bash
 ./masa --help
+./masa process --help
 ```
 
 Process a Takeout directory. Originals are kept:
 
 ```bash
+./masa process /path/to/takeout
+```
+
+The legacy flat form is still accepted:
+
+```bash
 ./masa /path/to/takeout
 ```
 
-Process a ZIP archive by year/month and accept fallback encoders automatically:
+Process a ZIP archive by year/month using four workers:
 
 ```bash
-./masa /path/to/takeout.zip --by-month --max-dim 2048 --quality 82 --yes-fallbacks
+./masa process /path/to/takeout.zip --by-month --workers 4 --yes-fallbacks
 ```
 
 Write to an explicit output directory and create a structured report:
 
 ```bash
-./masa /path/to/takeout -o /path/to/output --report /path/to/report.json
-```
-
-Write a YAML manifest:
-
-```bash
-./masa /path/to/takeout --format yaml
+./masa process /path/to/takeout -o /path/to/output --report /path/to/report.json
 ```
 
 Move originals and sidecars to quarantine after successful verification:
 
 ```bash
-./masa /path/to/takeout -f --quarantine-dir /path/to/quarantine
+./masa process /path/to/takeout -f --quarantine-dir /path/to/quarantine
 ```
 
-Preview without writing output, manifest records, error files, or quarantine
-logs:
+Preview planned outputs, fallback decisions, and quarantine intent:
 
 ```bash
-./masa /path/to/takeout --dry-run
+./masa process /path/to/takeout --dry-run --report dry-run.json
+```
+
+Rerun only files from a previous error manifest:
+
+```bash
+./masa process /path/to/takeout --resume-errors /path/to/output/masa-errors.json
+```
+
+Inspect an output directory or manifest:
+
+```bash
+./masa inspect /path/to/output
+./masa inspect /path/to/output/masa.json
+```
+
+Summarize a run report, errors file, or cleanup log:
+
+```bash
+./masa report /path/to/report.json
+./masa report /path/to/output/masa-errors.json
+```
+
+Review or permanently delete quarantined files:
+
+```bash
+./masa cleanup /path/to/output/masa-cleanup-log.json --dry-run
+./masa cleanup /path/to/output/masa-cleanup-log.json --yes
 ```
 
 Disable or force color output:
@@ -112,7 +144,7 @@ NO_COLOR=1 ./masa --help
 FORCE_COLOR=1 ./masa --help
 ```
 
-## Options
+## Process Options
 
 `input_path`
 : Required. Path to a folder, ZIP file, or TAR/TAR.GZ archive.
@@ -138,40 +170,38 @@ FORCE_COLOR=1 ./masa --help
 `--quarantine-dir`
 : Quarantine directory. Defaults to `OUTPUT/.masa-quarantine`.
 
-`--keep-original`
-: Compatibility no-op. Originals are kept unless `-f/--quarantine-originals` is
-  set.
+`--yes-fallbacks`, `--no-fallbacks`, `--fail-on-fallback`
+: Control JPEG/PNG fallback behavior without interactive prompts.
 
-`--yes-fallbacks`
-: Accept JPEG/PNG fallbacks without prompting.
+`--workers`
+: Number of worker threads. Values above `1` require one of the noninteractive
+  fallback flags.
 
-`--no-fallbacks`
-: Decline JPEG/PNG fallbacks without prompting.
-
-`--fail-on-fallback`
-: Treat files that need encoder fallback as failures.
-
-`--skip-if-larger`
+`--skip-if-larger`, `--keep-if-larger`
 : Remove a converted output and record an error if the output is larger than the
   source.
 
+`--min-savings-percent`
+: Remove a converted output and record an error if it saves less than the
+  requested percentage.
+
+`--resume-errors`
+: Only process relative input paths listed in a previous `masa-errors.json`.
+
 `--report`
-: Write a structured JSON run report with totals, processed records, fallback
-  decisions, quarantine actions, and errors.
+: Write a structured JSON run report with totals, planned records, processed
+  records, fallback decisions, quarantine actions, and errors.
 
 `--errors`
 : Error manifest path. Defaults to `OUTPUT/masa-errors.json` when failures
   occur.
 
-`--quiet`
-: Suppress per-file progress output.
-
-`--verbose`
-: Print a final failed-file table. Error runs print the table automatically.
+`--quiet`, `--verbose`
+: Suppress per-file progress or print a final failed-file table.
 
 `--dry-run`
-: Read inputs and show a summary without writing outputs, manifests, errors, or
-  quarantine logs.
+: Plan a run without writing outputs, manifests, error files, or quarantine
+  logs. `--report` is still written if explicitly requested.
 
 `--format {json,yaml}`
 : Manifest format. Defaults to `json`.
@@ -202,48 +232,45 @@ output/
       Screenshot.webp
 ```
 
-## Manifest And Reports
+## Manifest, Reports, And Schemas
 
 Each processed file is recorded under its relative input path. Records include:
 
 - original filename, size, format, dimensions, and SHA-256 hash
 - output filename, size, format, and SHA-256 hash
 - `output_verified`
+- `metadata_verification`
 - whether EXIF bytes were embedded
 - date used for output organization
 
-`masa-errors.json` records failed files with the input path, stage, and message.
-`masa-cleanup-log.json` records every original or sidecar moved to quarantine.
-`--report` writes a full run report for scripts and auditing.
+Schema files:
 
-## Metadata Notes
-
-MASA records whether EXIF bytes were embedded, but metadata preservation is not
-guaranteed across every encoder and fallback path. AVIF/JPEG/PNG/WEBP support
-varies by Pillow build, and `piexif` can reject malformed or unsupported EXIF
-payloads. Treat `exif_tags_kept: true` as "metadata was embedded" and
-`exif_tags_kept: false` as "conversion succeeded without EXIF bytes."
+- `schemas/manifest.schema.json`
+- `schemas/errors.schema.json`
+- `schemas/cleanup-log.schema.json`
+- `schemas/report.schema.json`
 
 ## Safety Notes
 
-MASA no longer hard-deletes originals. `-f/--quarantine-originals` moves
-directory input originals and matching sidecars into quarantine only after:
+MASA does not hard-delete originals during processing. `-f/--quarantine-originals`
+moves directory input originals and matching sidecars into quarantine only after:
 
 - the converted temporary file has been copied
 - the temporary and final SHA-256 hashes match
 - the final image can be reopened and decoded
-- the manifest record is ready to be written
+- the manifest record is written
 
-Quarantine is still a migration action. Before large archival runs, prefer:
+Quarantine is still a migration action. Before large archival runs:
 
 - run once without `-f`
 - inspect a sample of outputs
 - keep a separate backup
 - use `--report` and review errors
-- use `--skip-if-larger` if space savings are mandatory
+- use `--skip-if-larger` or `--min-savings-percent` if space savings are
+  mandatory
 
-Permanent deletion should be a separate manual cleanup after reviewing the
-quarantine folder and `masa-cleanup-log.json`.
+Permanent deletion is handled by `masa cleanup` after reviewing the quarantine
+folder and `masa-cleanup-log.json`.
 
 ## Project Structure
 
@@ -252,6 +279,14 @@ quarantine folder and `masa-cleanup-log.json`.
 ├── masa
 ├── pyproject.toml
 ├── requirements.txt
+├── scripts/
+│   ├── ci.sh
+│   └── release-check.sh
+├── schemas/
+│   ├── cleanup-log.schema.json
+│   ├── errors.schema.json
+│   ├── manifest.schema.json
+│   └── report.schema.json
 ├── src/
 │   └── python/
 │       └── masa_cli/
@@ -270,9 +305,7 @@ quarantine folder and `masa-cleanup-log.json`.
 
 ## Remaining Improvements
 
-- Add an explicit cleanup command that can permanently remove quarantined files
-  after a reviewed report.
-- Add a richer metadata audit that compares source and output EXIF fields when
-  both formats support them.
 - Add optional OS trash integration through a dependency such as `send2trash`.
-- Add concurrent processing with bounded disk-space checks.
+- Add process-level benchmarks for large archives and tune `--workers` defaults.
+- Add deeper metadata comparison for formats/Pillow builds that preserve EXIF
+  consistently.

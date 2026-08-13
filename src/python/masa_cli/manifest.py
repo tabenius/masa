@@ -27,7 +27,7 @@ class ManifestManager:
 
         if os.path.exists(self.manifest_path):
             try:
-                with open(self.manifest_path, "r", encoding="utf-8") as f:
+                with open(self.manifest_path, encoding="utf-8") as f:
                     if self.format_type in ("yaml", "yml"):
                         if yaml is None:
                             raise RuntimeError("PyYAML is required to read YAML manifests")
