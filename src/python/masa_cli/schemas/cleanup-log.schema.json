@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tabenius/masa/schemas/cleanup-log.schema.json",
+  "title": "MASA Cleanup Log",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["kind", "source", "quarantine_path"],
+    "properties": {
+      "kind": {"type": "string"},
+      "source": {"type": "string"},
+      "quarantine_path": {"type": "string"}
+    },
+    "additionalProperties": true
+  }
+}

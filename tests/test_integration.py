@@ -1,3 +1,4 @@
+import importlib.resources
 import json
 import sys
 import tarfile
@@ -286,6 +287,43 @@ def test_benchmark_writes_json(tmp_path: Path) -> None:
     data = json.loads(output_path.read_text(encoding="utf-8"))
     assert data["file_count"] == 1
     assert [row["workers"] for row in data["benchmarks"]] == [1, 2]
+
+
+def test_doctor_reports_environment(capsys) -> None:
+    result = main(["doctor", "--json"])
+
+    assert result == 0
+    data = json.loads(capsys.readouterr().out)
+    assert "python" in data
+    assert "encoders" in data
+
+
+def test_validate_accepts_manifest(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert main([str(input_dir), "-o", str(output_dir), "--quiet"]) == 0
+
+    result = main(["validate", str(output_dir / "masa.json")])
+
+    assert result == 0
+    assert "valid manifest" in capsys.readouterr().out
+
+
+def test_validate_rejects_invalid_errors_file(tmp_path: Path, capsys) -> None:
+    target = tmp_path / "masa-errors.json"
+    target.write_text(json.dumps({"errors": "not a list"}), encoding="utf-8")
+
+    result = main(["validate", str(target)])
+
+    assert result == 1
+    assert "invalid errors" in capsys.readouterr().out
+
+
+def test_packaged_schemas_are_available() -> None:
+    schema = importlib.resources.files("masa_cli").joinpath("schemas", "manifest.schema.json")
+
+    assert schema.is_file()
 
 
 def test_unsafe_zip_path_is_rejected(tmp_path: Path) -> None:

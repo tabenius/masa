@@ -10,6 +10,8 @@
 - Add optional `cleanup --trash` support through the `trash` extra.
 - Add `benchmark` subcommand for worker throughput checks.
 - Add expected/actual metadata verification details for EXIF date and GPS.
+- Add `doctor` command for dependency and encoder diagnostics.
+- Add `validate` command for MASA JSON files, backed by bundled schemas.
 
 ## 0.2.0
 

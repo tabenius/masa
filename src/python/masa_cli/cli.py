@@ -1,4 +1,6 @@
 import argparse
+import importlib.metadata
+import importlib.resources
 import json
 import os
 import shutil
@@ -18,7 +20,7 @@ from masa_cli.ui import print_error, print_warning, render_progress
 
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif", ".bmp", ".gif"}
 LOSSLESS_SOURCE_FORMATS = {"PNG", "GIF", "WEBP", "TIFF", "TIF", "BMP"}
-SUBCOMMANDS = {"process", "inspect", "cleanup", "report", "benchmark"}
+SUBCOMMANDS = {"process", "inspect", "cleanup", "report", "benchmark", "doctor", "validate"}
 
 BOLD = "\033[1m"
 CYAN = "\033[36m"
@@ -389,6 +391,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
               masa inspect /path/to/output
               masa cleanup /path/to/output/masa-cleanup-log.json --yes
               masa benchmark /path/to/takeout --workers 1,2,4
+              masa doctor
+              masa validate /path/to/output/masa.json
             """
         ),
         formatter_class=ColorHelpFormatter,
@@ -429,6 +433,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     benchmark_parser.add_argument("--workers", default="1,2,4", help="Comma-separated worker counts (default: 1,2,4).")
     benchmark_parser.add_argument("--limit", type=int, help="Maximum number of images to benchmark.")
     benchmark_parser.add_argument("--output", help="Write benchmark results as JSON.")
+
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="Show runtime dependency and encoder diagnostics.", formatter_class=ColorHelpFormatter
+    )
+    doctor_parser.add_argument("--json", action="store_true", help="Write diagnostics as JSON.")
+
+    validate_parser = subparsers.add_parser(
+        "validate", help="Validate MASA JSON files against bundled schemas.", formatter_class=ColorHelpFormatter
+    )
+    validate_parser.add_argument("path", help="Path to masa.json, masa-errors.json, report JSON, or cleanup log.")
+    validate_parser.add_argument(
+        "--kind", choices=["auto", "manifest", "errors", "report", "cleanup"], default="auto", help="Schema kind."
+    )
 
     if not argv:
         parser.print_help()
@@ -948,6 +965,148 @@ def _run_benchmark(args: argparse.Namespace) -> int:
         shutil.rmtree(secure_tmp_base, ignore_errors=True)
 
 
+def _version_for_package(package_name: str) -> str | None:
+    try:
+        return importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _run_doctor(args: argparse.Namespace) -> int:
+    diagnostics = {
+        "python": sys.version.split()[0],
+        "executable": sys.executable,
+        "packages": {
+            "masa-google-takeout-compressor": _version_for_package("masa-google-takeout-compressor"),
+            "Pillow": _version_for_package("Pillow"),
+            "piexif": _version_for_package("piexif"),
+            "pillow-avif-plugin": _version_for_package("pillow-avif-plugin"),
+            "PyYAML": _version_for_package("PyYAML"),
+            "Send2Trash": _version_for_package("Send2Trash"),
+            "jsonschema": _version_for_package("jsonschema"),
+        },
+        "encoders": {},
+    }
+    try:
+        from masa_cli.image_processor import can_save_format
+
+        diagnostics["encoders"] = {
+            "AVIF": can_save_format("AVIF"),
+            "WEBP": can_save_format("WEBP"),
+            "JPEG": can_save_format("JPEG"),
+            "PNG": can_save_format("PNG"),
+        }
+    except Exception as e:
+        diagnostics["encoder_error"] = str(e)
+
+    if args.json:
+        print(json.dumps(diagnostics, indent=2))
+    else:
+        print(f"Python    : {diagnostics['python']}")
+        print(f"Executable: {diagnostics['executable']}")
+        print("Packages")
+        for name, version in diagnostics["packages"].items():
+            print(f"- {name}: {version or 'missing'}")
+        print("Encoders")
+        for name, available in diagnostics["encoders"].items():
+            print(f"- {name}: {'yes' if available else 'no'}")
+    missing_required = [
+        name
+        for name in ("Pillow", "piexif", "pillow-avif-plugin", "PyYAML")
+        if diagnostics["packages"].get(name) is None
+    ]
+    return 1 if missing_required else 0
+
+
+def _schema_resource_name(kind: str) -> str:
+    return {
+        "manifest": "manifest.schema.json",
+        "errors": "errors.schema.json",
+        "report": "report.schema.json",
+        "cleanup": "cleanup-log.schema.json",
+    }[kind]
+
+
+def _load_schema(kind: str) -> dict:
+    schema_file = importlib.resources.files("masa_cli").joinpath("schemas", _schema_resource_name(kind))
+    return json.loads(schema_file.read_text(encoding="utf-8"))
+
+
+def _detect_schema_kind(path: str, data: dict | list) -> str:
+    basename = os.path.basename(path)
+    if isinstance(data, list):
+        return "cleanup"
+    if isinstance(data, dict):
+        if "totals" in data:
+            return "report"
+        if "records" in data:
+            return "manifest"
+        if "errors" in data:
+            return "errors"
+    if "cleanup" in basename:
+        return "cleanup"
+    raise ValueError("Could not infer schema kind; pass --kind")
+
+
+def _validate_builtin(kind: str, data: dict | list) -> list[str]:
+    errors = []
+    if kind == "cleanup":
+        if not isinstance(data, list):
+            return ["cleanup log must be a JSON list"]
+        required = {"kind", "source", "quarantine_path"}
+        for idx, entry in enumerate(data):
+            if not isinstance(entry, dict):
+                errors.append(f"cleanup[{idx}] must be an object")
+            elif missing := required - set(entry):
+                errors.append(f"cleanup[{idx}] missing: {', '.join(sorted(missing))}")
+        return errors
+
+    if not isinstance(data, dict):
+        return [f"{kind} must be a JSON object"]
+    if kind == "manifest":
+        if not isinstance(data.get("records"), dict):
+            return ["manifest records must be an object"]
+    elif kind == "errors":
+        if not isinstance(data.get("errors"), list):
+            return ["errors must be an array"]
+    elif kind == "report":
+        if not isinstance(data.get("totals"), dict):
+            return ["report totals must be an object"]
+    return errors
+
+
+def _run_validate(args: argparse.Namespace) -> int:
+    path = os.path.abspath(args.path)
+    data = _load_json(path)
+    try:
+        kind = _detect_schema_kind(path, data) if args.kind == "auto" else args.kind
+    except ValueError as e:
+        print_error(str(e))
+        return 2
+
+    schema = _load_schema(kind)
+    try:
+        import jsonschema
+
+        jsonschema.validate(instance=data, schema=schema)
+        errors = []
+        engine = "jsonschema"
+    except ImportError:
+        errors = _validate_builtin(kind, data)
+        engine = "builtin"
+    except Exception as e:
+        errors = [str(e)]
+        engine = "jsonschema"
+
+    if errors:
+        print(f"{path}: invalid {kind} ({engine})")
+        for error in errors:
+            print(f"- {error}")
+        return 1
+    print(f"{path}: valid {kind} ({engine})")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         args = _parse_args(argv)
@@ -963,6 +1122,10 @@ def main(argv: list[str] | None = None) -> int:
         return _run_report(args)
     if args.command == "benchmark":
         return _run_benchmark(args)
+    if args.command == "doctor":
+        return _run_doctor(args)
+    if args.command == "validate":
+        return _run_validate(args)
     print_error("No command provided")
     return 2
 

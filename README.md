@@ -40,8 +40,8 @@ delete them. Use `masa cleanup` later if you decide to delete quarantined files.
   `--min-savings-percent` policies.
 - Writes JSON or YAML manifests, `masa-errors.json`, `masa-cleanup-log.json`,
   structured `--report` output, and JSON Schemas under `schemas/`.
-- Provides subcommands: `process`, `inspect`, `cleanup`, `report`, and
-  `benchmark`.
+- Provides subcommands: `process`, `inspect`, `cleanup`, `report`,
+  `benchmark`, `doctor`, and `validate`.
 - Can move quarantined files to the OS trash with `masa cleanup --trash` when
   installed with the `trash` extra.
 - Provides colored progress/help output, plus `NO_COLOR=1` and `FORCE_COLOR=1`.
@@ -60,6 +60,12 @@ Optional OS trash support:
 
 ```bash
 python -m pip install -e ".[trash]"
+```
+
+Optional full JSON Schema validation support:
+
+```bash
+python -m pip install -e ".[validate]"
 ```
 
 For development:
@@ -153,6 +159,22 @@ Benchmark scan and metadata-read throughput:
 
 ```bash
 ./masa benchmark /path/to/takeout --workers 1,2,4 --output benchmark.json
+```
+
+Inspect runtime dependencies and encoder support:
+
+```bash
+./masa doctor
+./masa doctor --json
+```
+
+Validate MASA JSON files against bundled schemas:
+
+```bash
+./masa validate /path/to/output/masa.json
+./masa validate /path/to/output/masa-errors.json
+./masa validate /path/to/output/masa-cleanup-log.json
+./masa validate /path/to/report.json --kind report
 ```
 
 Disable or force color output:
@@ -268,6 +290,9 @@ Schema files:
 - `schemas/errors.schema.json`
 - `schemas/cleanup-log.schema.json`
 - `schemas/report.schema.json`
+
+The same schemas are packaged inside the installed wheel so `masa validate`
+works outside a source checkout.
 
 ## Safety Notes
 

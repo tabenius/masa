@@ -1,3 +1,4 @@
 include CHANGELOG.md
 recursive-include schemas *.json
+recursive-include src/python/masa_cli/schemas *.json
 recursive-include scripts *.sh
