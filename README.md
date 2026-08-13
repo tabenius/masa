@@ -155,6 +155,7 @@ Review or permanently delete quarantined files:
 ./masa cleanup /path/to/output/masa-cleanup-log.json --dry-run
 ./masa cleanup /path/to/output/masa-cleanup-log.json --yes
 ./masa cleanup /path/to/output/masa-cleanup-log.json --trash
+./masa cleanup /path/to/output/masa-cleanup-log.json --dry-run --json
 ```
 
 Restore quarantined originals and sidecars:
@@ -163,6 +164,7 @@ Restore quarantined originals and sidecars:
 ./masa restore /path/to/output/masa-cleanup-log.json --dry-run
 ./masa restore /path/to/output/masa-cleanup-log.json
 ./masa restore /path/to/output/masa-cleanup-log.json --overwrite
+./masa restore /path/to/output/masa-cleanup-log.json --dry-run --json
 ```
 
 Verify output files against the manifest:
@@ -335,7 +337,8 @@ folder and `masa-cleanup-log.json`. New cleanup logs with hashes are checked
 before `cleanup --yes` or `cleanup --trash` changes files. If any quarantined
 file is missing, modified, or represented by an invalid log entry, cleanup
 stops before deleting or trashing anything. `cleanup --dry-run` performs the
-same preflight checks.
+same preflight checks. Use `cleanup --json` for machine-readable preflight and
+cleanup summaries.
 
 If a quarantine run was premature, `masa restore` moves quarantined files back
 to their original source paths. New cleanup logs include `source_sha256`,
@@ -344,7 +347,7 @@ file back. Older logs without hashes still restore, but cannot detect quarantine
 file edits. If any new-log hash check fails, restore stops before moving files
 so image/sidecar pairs are not partially restored from a suspect batch.
 `--dry-run` performs the same preflight checks and exits nonzero when restore
-would be blocked.
+would be blocked. Use `restore --json` for machine-readable restore summaries.
 
 By default, restore skips source paths that already exist. `--overwrite` removes
 an existing source file before moving the quarantined file back, so use it only

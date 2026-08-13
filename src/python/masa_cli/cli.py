@@ -433,6 +433,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--trash", action="store_true", help="Move quarantined files to OS trash via Send2Trash."
     )
     cleanup_parser.add_argument("--dry-run", action="store_true", help="Show what would be deleted.")
+    cleanup_parser.add_argument("--json", action="store_true", help="Write cleanup results as JSON.")
 
     restore_parser = subparsers.add_parser(
         "restore", help="Restore quarantined files from a cleanup log.", formatter_class=ColorHelpFormatter
@@ -440,6 +441,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     restore_parser.add_argument("cleanup_log", help="Path to masa-cleanup-log.json.")
     restore_parser.add_argument("--dry-run", action="store_true", help="Show what would be restored.")
     restore_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing source paths.")
+    restore_parser.add_argument("--json", action="store_true", help="Write restore results as JSON.")
 
     report_parser = subparsers.add_parser(
         "report", help="Summarize a MASA report, errors file, or cleanup log.", formatter_class=ColorHelpFormatter
@@ -868,6 +870,10 @@ def _preflight_cleanup_log(actions: list) -> dict:
     return result
 
 
+def _print_json_summary(summary: dict) -> None:
+    print(json.dumps(summary, indent=2))
+
+
 def _run_cleanup(args: argparse.Namespace) -> int:
     if args.yes and args.trash:
         print_error("--yes and --trash are mutually exclusive")
@@ -879,16 +885,35 @@ def _run_cleanup(args: argparse.Namespace) -> int:
     preflight = _preflight_cleanup_log(actions)
     entries = preflight["entries"]
     blocked = bool(preflight["missing"] or preflight["hash_mismatches"] or preflight["invalid"])
-    print(f"Quarantined files in log : {len(actions)}")
-    print(f"Verified files           : {len(entries)}")
-    print(f"Missing quarantined files: {preflight['missing']}")
-    print(f"Hash mismatches          : {preflight['hash_mismatches']}")
-    print(f"Invalid log entries      : {preflight['invalid']}")
+    summary = {
+        "cleanup_log": os.path.abspath(args.cleanup_log),
+        "mode": "trash" if args.trash else "delete" if args.yes else "inspect",
+        "dry_run": args.dry_run,
+        "quarantined_files": len(actions),
+        "verified_files": len(entries),
+        "missing_quarantined_files": preflight["missing"],
+        "hash_mismatches": preflight["hash_mismatches"],
+        "invalid_log_entries": preflight["invalid"],
+        "changed_files": 0,
+        "blocked": blocked,
+    }
+    if not args.json:
+        print(f"Quarantined files in log : {summary['quarantined_files']}")
+        print(f"Verified files           : {summary['verified_files']}")
+        print(f"Missing quarantined files: {summary['missing_quarantined_files']}")
+        print(f"Hash mismatches          : {summary['hash_mismatches']}")
+        print(f"Invalid log entries      : {summary['invalid_log_entries']}")
     if (not args.yes and not args.trash) or args.dry_run:
-        print("No files changed. Pass --yes to permanently delete or --trash to move files to OS trash.")
+        if args.json:
+            _print_json_summary(summary)
+        else:
+            print("No files changed. Pass --yes to permanently delete or --trash to move files to OS trash.")
         return 1 if blocked else 0
     if blocked:
-        print_warning("Cleanup preflight failed. No files deleted or trashed.")
+        if args.json:
+            _print_json_summary(summary)
+        else:
+            print_warning("Cleanup preflight failed. No files deleted or trashed.")
         return 1
     changed = 0
     if args.trash:
@@ -900,12 +925,20 @@ def _run_cleanup(args: argparse.Namespace) -> int:
         for entry in entries:
             send2trash(entry["quarantine_path"])
             changed += 1
-        print(f"Trashed files            : {changed}")
+        summary["changed_files"] = changed
+        if args.json:
+            _print_json_summary(summary)
+        else:
+            print(f"Trashed files            : {changed}")
         return 0
     for entry in entries:
         os.remove(entry["quarantine_path"])
         changed += 1
-    print(f"Deleted files            : {changed}")
+    summary["changed_files"] = changed
+    if args.json:
+        _print_json_summary(summary)
+    else:
+        print(f"Deleted files            : {changed}")
     return 0
 
 
@@ -918,10 +951,26 @@ def _run_restore(args: argparse.Namespace) -> int:
     preflight = _preflight_cleanup_log(actions)
     restorable = [entry for entry in preflight["entries"] if entry.get("source")]
     invalid = preflight["invalid"] + (len(preflight["entries"]) - len(restorable))
-    print(f"Quarantined files in log : {len(actions)}")
-    print(f"Restorable files         : {len(restorable)}")
-    print(f"Missing quarantined files: {preflight['missing']}")
-    print(f"Invalid log entries      : {invalid}")
+    summary = {
+        "cleanup_log": os.path.abspath(args.cleanup_log),
+        "dry_run": args.dry_run,
+        "overwrite": args.overwrite,
+        "quarantined_files": len(actions),
+        "restorable_files": len(restorable),
+        "missing_quarantined_files": preflight["missing"],
+        "invalid_log_entries": invalid,
+        "skipped_existing_files": 0,
+        "hash_mismatches": preflight["hash_mismatches"],
+        "failed_restores": 0,
+        "would_restore_files": 0,
+        "restored_files": 0,
+        "blocked": False,
+    }
+    if not args.json:
+        print(f"Quarantined files in log : {summary['quarantined_files']}")
+        print(f"Restorable files         : {summary['restorable_files']}")
+        print(f"Missing quarantined files: {summary['missing_quarantined_files']}")
+        print(f"Invalid log entries      : {summary['invalid_log_entries']}")
 
     restore_candidates = []
     skipped_existing = 0
@@ -940,11 +989,22 @@ def _run_restore(args: argparse.Namespace) -> int:
 
     restored = 0
     preflight_failed = bool(preflight["missing"] or invalid or skipped_existing or hash_mismatches or failed)
+    summary["skipped_existing_files"] = skipped_existing
+    summary["hash_mismatches"] = hash_mismatches
+    summary["failed_restores"] = failed
+    summary["blocked"] = preflight_failed
     if args.dry_run:
-        print(f"Would restore files      : {len(restore_candidates) if not preflight_failed else 0}")
-        print("No files restored.")
+        summary["would_restore_files"] = len(restore_candidates) if not preflight_failed else 0
+        if args.json:
+            _print_json_summary(summary)
+        else:
+            print(f"Would restore files      : {summary['would_restore_files']}")
+            print("No files restored.")
     elif preflight_failed:
-        print_warning("Restore preflight failed. No files restored.")
+        if args.json:
+            _print_json_summary(summary)
+        else:
+            print_warning("Restore preflight failed. No files restored.")
     else:
         for entry in restore_candidates:
             source_path = entry["source"]
@@ -956,12 +1016,19 @@ def _run_restore(args: argparse.Namespace) -> int:
                 shutil.move(quarantine_path, source_path)
                 restored += 1
             except Exception as e:
-                print_warning(f"Could not restore {quarantine_path}: {e}")
+                if not args.json:
+                    print_warning(f"Could not restore {quarantine_path}: {e}")
                 failed += 1
-    print(f"Restored files           : {restored}")
-    print(f"Skipped existing files   : {skipped_existing}")
-    print(f"Hash mismatches          : {hash_mismatches}")
-    print(f"Failed restores          : {failed}")
+        summary["restored_files"] = restored
+        summary["failed_restores"] = failed
+        summary["blocked"] = bool(failed)
+        if args.json:
+            _print_json_summary(summary)
+    if not args.json:
+        print(f"Restored files           : {summary['restored_files']}")
+        print(f"Skipped existing files   : {summary['skipped_existing_files']}")
+        print(f"Hash mismatches          : {summary['hash_mismatches']}")
+        print(f"Failed restores          : {summary['failed_restores']}")
     return 1 if preflight["missing"] or invalid or skipped_existing or hash_mismatches or failed else 0
 
 

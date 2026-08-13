@@ -289,6 +289,36 @@ def test_restore_quarantined_files(tmp_path: Path) -> None:
     assert not (quarantine_dir / "photo.png").exists()
 
 
+def test_restore_json_reports_dry_run(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    quarantine_dir = tmp_path / "quarantine"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert (
+        main(
+            [
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-f",
+                "--quarantine-dir",
+                str(quarantine_dir),
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+    cleanup_log = output_dir / "masa-cleanup-log.json"
+    capsys.readouterr()
+
+    assert main(["restore", str(cleanup_log), "--dry-run", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["dry_run"] is True
+    assert data["blocked"] is False
+    assert data["would_restore_files"] == 2
+    assert data["restored_files"] == 0
+
+
 def test_restore_refuses_modified_quarantined_file(tmp_path: Path, capsys) -> None:
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
@@ -450,6 +480,36 @@ def test_cleanup_dry_run_checks_hashes(tmp_path: Path, capsys) -> None:
     assert main(["cleanup", str(cleanup_log), "--dry-run"]) == 1
     assert (quarantine_dir / "photo.png").exists()
     assert "Hash mismatches          : 1" in capsys.readouterr().out
+
+
+def test_cleanup_json_reports_dry_run(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    quarantine_dir = tmp_path / "quarantine"
+    _write_png_with_sidecar(input_dir / "photo.png")
+    assert (
+        main(
+            [
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-f",
+                "--quarantine-dir",
+                str(quarantine_dir),
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+    cleanup_log = output_dir / "masa-cleanup-log.json"
+    capsys.readouterr()
+
+    assert main(["cleanup", str(cleanup_log), "--dry-run", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["dry_run"] is True
+    assert data["blocked"] is False
+    assert data["verified_files"] == 2
+    assert data["changed_files"] == 0
 
 
 def test_benchmark_writes_json(tmp_path: Path) -> None:

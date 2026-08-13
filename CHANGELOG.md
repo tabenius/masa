@@ -17,6 +17,7 @@
 - Add cleanup-log hashes and restore hash checks for quarantined files.
 - Make restore dry-runs run preflight checks and keep blocked restores all-or-nothing.
 - Make cleanup dry-runs and destructive cleanup verify quarantine hashes first.
+- Add `--json` summaries for `cleanup` and `restore`.
 
 ## 0.2.0
 
